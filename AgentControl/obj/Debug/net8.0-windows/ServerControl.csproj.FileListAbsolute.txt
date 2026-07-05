@@ -1,0 +1,16 @@
+C:\Users\DoThai\Desktop\AgentControl\bin\Debug\net8.0-windows\ServerControl.exe
+C:\Users\DoThai\Desktop\AgentControl\bin\Debug\net8.0-windows\ServerControl.deps.json
+C:\Users\DoThai\Desktop\AgentControl\bin\Debug\net8.0-windows\ServerControl.runtimeconfig.json
+C:\Users\DoThai\Desktop\AgentControl\bin\Debug\net8.0-windows\ServerControl.dll
+C:\Users\DoThai\Desktop\AgentControl\bin\Debug\net8.0-windows\ServerControl.pdb
+C:\Users\DoThai\Desktop\AgentControl\obj\Debug\net8.0-windows\AgentControl.Form1.resources
+C:\Users\DoThai\Desktop\AgentControl\obj\Debug\net8.0-windows\ServerControl.csproj.GenerateResource.cache
+C:\Users\DoThai\Desktop\AgentControl\obj\Debug\net8.0-windows\ServerControl.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\DoThai\Desktop\AgentControl\obj\Debug\net8.0-windows\ServerControl.AssemblyInfoInputs.cache
+C:\Users\DoThai\Desktop\AgentControl\obj\Debug\net8.0-windows\ServerControl.AssemblyInfo.cs
+C:\Users\DoThai\Desktop\AgentControl\obj\Debug\net8.0-windows\ServerControl.csproj.CoreCompileInputs.cache
+C:\Users\DoThai\Desktop\AgentControl\obj\Debug\net8.0-windows\ServerControl.dll
+C:\Users\DoThai\Desktop\AgentControl\obj\Debug\net8.0-windows\refint\ServerControl.dll
+C:\Users\DoThai\Desktop\AgentControl\obj\Debug\net8.0-windows\ServerControl.pdb
+C:\Users\DoThai\Desktop\AgentControl\obj\Debug\net8.0-windows\ServerControl.genruntimeconfig.cache
+C:\Users\DoThai\Desktop\AgentControl\obj\Debug\net8.0-windows\ref\ServerControl.dll
