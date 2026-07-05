@@ -1,0 +1,11 @@
+C:\Users\DoThai\Desktop\NHFUiControls\NHFUiControls\bin\Debug\net8.0-windows\NHFUiControls.deps.json
+C:\Users\DoThai\Desktop\NHFUiControls\NHFUiControls\bin\Debug\net8.0-windows\NHFUiControls.dll
+C:\Users\DoThai\Desktop\NHFUiControls\NHFUiControls\bin\Debug\net8.0-windows\NHFUiControls.pdb
+C:\Users\DoThai\Desktop\NHFUiControls\NHFUiControls\obj\Debug\net8.0-windows\NHFUiControls.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\DoThai\Desktop\NHFUiControls\NHFUiControls\obj\Debug\net8.0-windows\NHFUiControls.AssemblyInfoInputs.cache
+C:\Users\DoThai\Desktop\NHFUiControls\NHFUiControls\obj\Debug\net8.0-windows\NHFUiControls.AssemblyInfo.cs
+C:\Users\DoThai\Desktop\NHFUiControls\NHFUiControls\obj\Debug\net8.0-windows\NHFUiControls.csproj.CoreCompileInputs.cache
+C:\Users\DoThai\Desktop\NHFUiControls\NHFUiControls\obj\Debug\net8.0-windows\NHFUiControls.dll
+C:\Users\DoThai\Desktop\NHFUiControls\NHFUiControls\obj\Debug\net8.0-windows\refint\NHFUiControls.dll
+C:\Users\DoThai\Desktop\NHFUiControls\NHFUiControls\obj\Debug\net8.0-windows\NHFUiControls.pdb
+C:\Users\DoThai\Desktop\NHFUiControls\NHFUiControls\obj\Debug\net8.0-windows\ref\NHFUiControls.dll

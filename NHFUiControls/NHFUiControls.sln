@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.37411.7 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NHFUiControls", "NHFUiControls\NHFUiControls.csproj", "{7CB46E8C-EDA6-4ED8-9E33-C9E7D456F1DB}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{7CB46E8C-EDA6-4ED8-9E33-C9E7D456F1DB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7CB46E8C-EDA6-4ED8-9E33-C9E7D456F1DB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7CB46E8C-EDA6-4ED8-9E33-C9E7D456F1DB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7CB46E8C-EDA6-4ED8-9E33-C9E7D456F1DB}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {C6C0806E-6754-465E-AC7B-E630963113A5}
+	EndGlobalSection
+EndGlobal
