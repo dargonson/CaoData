@@ -11,7 +11,7 @@ namespace AgentControl
 {
     public partial class Form1 : Form
     {
-       
+
         // --- BIẾN KHỞI TẠO SOCKET SERVER --- [cite: 989]
         private TcpListener _serverListener;
         private bool _isListening = false;
@@ -70,7 +70,7 @@ namespace AgentControl
             tvRemoteFolders.Font = new Font("Segoe UI", 9F);
             tvRemoteFolders.ItemHeight = 24;
             lvRemoteFiles.SmallImageList = shellImages;
-                
+
             // Khởi tạo Database SQLite ngầm
             await SQLiteHelper.InitializeDatabaseAsync();
 
@@ -79,7 +79,7 @@ namespace AgentControl
             // Kích hoạt luồng chạy ngầm quét Tim mạch (Heartbeat) chu kỳ 5 giây/lần
             _ = StartServerHeartbeatMonitorAsync();
         }
-        
+
         private async void btnKetNoi_Click(object sender, EventArgs e)
         {
             if (!_isListening)
@@ -182,6 +182,37 @@ namespace AgentControl
                             currentAgentID = packet.AgentID;
 
                             // TÍNH NĂNG 2: Xử lý gói ĐĂNG KÝ MÁY [cite: 852]
+                            if (packet.Type == "BROWSE_DRIVES_RESPONSE")
+                            {
+                                var drives = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.List<string>>(packet.Data);
+
+                                if (drives != null)
+                                {
+                                    // Ép chạy an toàn trên luồng giao diện WinForms công nghệ UI
+                                    this.Invoke(new Action(() => {
+
+                                        // Xóa sạch cây thư mục cũ trước khi nạp máy mới
+                                        tvRemoteFolders.Nodes.Clear();
+
+                                        foreach (var drive in drives)
+                                        {
+                                            // Tạo Node gốc cho từng ổ đĩa
+                                            TreeNode driveNode = new TreeNode(drive);
+                                            driveNode.Tag = drive; // Lưu đường dẫn ("C:\") vào Tag để làm mồi Lazy Loading
+
+                                            // --- GIỮ NGUYÊN HOẶC CHÈN HÀM ICON SHELLITEMS CỦA FEN TẠI ĐÂY ---
+                                            // Ví dụ: ShellIconHelper.GetIconForNode(driveNode, drive);
+
+                                            // Tạo một Node ảo rỗng bên trong để TreeView hiện dấu cộng [+] bóp bung ra
+                                            TreeNode dummyNode = new TreeNode("*");
+                                            driveNode.Nodes.Add(dummyNode);
+
+                                            // Add Node ổ đĩa chính thức lên TreeView
+                                            tvRemoteFolders.Nodes.Add(driveNode);
+                                        }
+                                    }));
+                                }
+                            }
                             if (packet.Type == "REGISTER")
                             {
                                 var info = JsonSerializer.Deserialize<AgentInfo>(packet.Data);
@@ -194,7 +225,8 @@ namespace AgentControl
                                     _connectedAgents[packet.AgentID] = (client, DateTime.Now);
 
                                     // Ép ListView cập nhật lại chữ và màu sắc an toàn từ luồng ngầm [cite: 881]
-                                    this.Invoke(new Action(async () => {
+                                    this.Invoke(new Action(async () =>
+                                    {
                                         await LoadAllAgentsFromDbAsync();
                                     }));
                                 }
@@ -238,7 +270,8 @@ namespace AgentControl
                     {
                         _connectedAgents.TryRemove(currentAgentID, out _);
                         await SQLiteHelper.SetAgentOfflineAsync(currentAgentID);
-                        this.Invoke(new Action(async () => {
+                        this.Invoke(new Action(async () =>
+                        {
                             await LoadAllAgentsFromDbAsync();
                         }));
                     }
@@ -258,14 +291,15 @@ namespace AgentControl
                     if (_connectedAgents.TryGetValue(agentId, out var item))
                     {
                         // Kiểm tra nếu thời gian hiện tại trừ đi LastSeen vượt quá 90 giây [cite: 857, 885]
-                         if ((DateTime.Now - item.LastSeen).TotalSeconds > 90) 
+                        if ((DateTime.Now - item.LastSeen).TotalSeconds > 90)
                         {
                             _connectedAgents.TryRemove(agentId, out _);
                             item.Client?.Close(); // Ép ngắt kết nối socket cũ công nghệ
 
                             // Cập nhật SQLite và làm mới UI [cite: 885]
-                             await SQLiteHelper.SetAgentOfflineAsync(agentId);
-                            this.Invoke(new Action(async () => {
+                            await SQLiteHelper.SetAgentOfflineAsync(agentId);
+                            this.Invoke(new Action(async () =>
+                            {
                                 await LoadAllAgentsFromDbAsync();
                             }));
                         }
@@ -685,17 +719,69 @@ namespace AgentControl
             {
                 bool isOnlineStatus = agent["Status"] == "Online";
 
-            // Gọi đúng hàm custom của fen để nạp dữ liệu 
-            ListboxAgents.AddAgent(
-            agent["MachineName"],
-            agent["Username"],
-            agent["IPAddress"],
-            agent["OSVersion"],
-            agent["AgentID"],
-            isOnlineStatus
-            );
+                // Gọi đúng hàm custom của fen để nạp dữ liệu 
+                ListboxAgents.AddAgent(
+                agent["MachineName"],
+                agent["Username"],
+                agent["IPAddress"],
+                agent["OSVersion"],
+                agent["AgentID"],
+                isOnlineStatus
+                );
             }
         }
+        private async void ListboxAgents_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            // 1. Trích xuất AgentID từ dòng đang chọn
+            if (ListboxAgents.SelectedItem == null) return;
 
+            string selectedAgentId = "";
+            try
+            {
+                var selectedItem = ListboxAgents.SelectedItem;
+                var prop = selectedItem.GetType().GetProperty("AgentID");
+                if (prop != null)
+                {
+                    selectedAgentId = prop.GetValue(selectedItem)?.ToString() ?? "";
+                }
+                else
+                {
+                    selectedAgentId = selectedItem.ToString();
+                }
+            }
+            catch { }
+
+            if (string.IsNullOrEmpty(selectedAgentId)) return;
+
+            // 2. Khởi tạo gói lệnh cào ổ đĩa
+            SocketPacket requestPacket = new SocketPacket
+            {
+                Type = "BROWSE_DRIVES",
+                AgentID = selectedAgentId,
+                Data = string.Empty
+            };
+
+            // 3. ĐIỀU CHỈNH THEO BIẾN CỦA FEN: Tìm Agent trong _connectedAgents
+            if (_connectedAgents != null && _connectedAgents.TryGetValue(selectedAgentId, out var agentInfo))
+            {
+                // Vì agentInfo của fen là Tuple (Client, LastSeen) nên ta bốc agentInfo.Client ra xài
+                TcpClient client = agentInfo.Client;
+
+                if (client != null && client.Connected)
+                {
+                    var stream = client.GetStream();
+
+                    // Chuỗi hóa gói tin packet
+                    string jsonString = System.Text.Json.JsonSerializer.Serialize(requestPacket);
+                    byte[] dataBuffer = System.Text.Encoding.UTF8.GetBytes(jsonString);
+                    byte[] lengthPrefix = BitConverter.GetBytes(dataBuffer.Length);
+
+                    // Bắn dữ liệu thẳng xuống luồng Socket của máy Agent đang chọn
+                    await stream.WriteAsync(lengthPrefix, 0, lengthPrefix.Length);
+                    await stream.WriteAsync(dataBuffer, 0, dataBuffer.Length);
+                    await stream.FlushAsync();
+                }
+            }
+        }    
     }
 }

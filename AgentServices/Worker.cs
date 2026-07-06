@@ -329,6 +329,145 @@ namespace AgentService
         }
 
         // Luồng lắng nghe lệnh tối ưu, sẵn sàng phục vụ các tính năng duyệt file/copy ở lượt chat tới
+        /*private async Task ListenToServerAsync(CancellationToken token)
+        {
+            byte[] sizeBuffer = new byte[4];
+            try
+            {
+                while (_isConnected && !token.IsCancellationRequested && _stream != null)
+                {
+                    int bytesRead = await _stream.ReadAsync(sizeBuffer, 0, 4, token);
+                    if (bytesRead == 0) break; // Server chủ động ngắt kết nối
+
+                    int packetSize = BitConverter.ToInt32(sizeBuffer, 0);
+                    byte[] dataBuffer = new byte[packetSize];
+
+                    int totalBytesReceived = 0;
+                    while (totalBytesReceived < packetSize)
+                    {
+                        int read = await _stream.ReadAsync(dataBuffer, totalBytesReceived, packetSize - totalBytesReceived, token);
+                        if (read == 0) break;
+                        totalBytesReceived += read;
+                    }
+
+                    string jsonStr = Encoding.UTF8.GetString(dataBuffer);
+                    var packet = JsonSerializer.Deserialize<SocketPacket>(jsonStr);
+
+                    if (packet != null)
+                    {
+                        _logger?.LogInformation("Nhận lệnh từ Server: {Type}", packet.Type);
+                        if (packet.Type == "BROWSE_DRIVES")
+                        {
+                            _logger?.LogInformation("Server yêu cầu lấy danh sách ổ đĩa.");
+
+                            // 1. Cào danh sách các ổ đĩa thực tế đang sẵn sàng trên hệ điều hành
+                            var driveList = new System.Collections.Generic.List<string>();
+                            foreach (var drive in System.IO.DriveInfo.GetDrives())
+                            {
+                                if (drive.IsReady)
+                                {
+                                    driveList.Add(drive.Name); // Kết quả trả về dạng: "C:\", "D:\"
+                                }
+                            }
+
+                            // 2. Chuyển danh sách thành chuỗi JSON gán vào thuộc tính Data
+                            SocketPacket responsePacket = new SocketPacket
+                            {
+                                Type = "BROWSE_DRIVES_RESPONSE",
+                                AgentID = packet.AgentID,
+                                Data = System.Text.Json.JsonSerializer.Serialize(driveList)
+                            };
+
+                            // 3. Đóng gói chuỗi hóa toàn bộ gói tin để bắn ngược về Server
+                            string jsonString = System.Text.Json.JsonSerializer.Serialize(responsePacket);
+                            byte[] driveDataBuffer = System.Text.Encoding.UTF8.GetBytes(jsonString); // Đổi tên ở đây
+                            byte[] driveLengthPrefix = BitConverter.GetBytes(driveDataBuffer.Length); // Đổi tên ở đây
+
+                            if (_stream != null && _stream.CanWrite)
+                            {
+                                await _stream.WriteAsync(driveLengthPrefix, 0, driveLengthPrefix.Length);
+                                await _stream.WriteAsync(driveDataBuffer, 0, driveDataBuffer.Length);
+                                await _stream.FlushAsync();
+                            }
+                        }
+
+                        if (packet.Type == "GET_DRIVES")
+                        {
+                            var drives = new System.Collections.Generic.List<string>();
+                            foreach (var drive in System.IO.DriveInfo.GetDrives())
+                            {
+                                if (drive.IsReady) drives.Add(drive.Name); // Trả về dạng "C:\", "D:\"
+                            }
+
+                            SocketPacket response = new SocketPacket
+                            {
+                                Type = "GET_DRIVES_RESPONSE",
+                                AgentID = packet.AgentID,
+                                Data = System.Text.Json.JsonSerializer.Serialize(drives)
+                            };
+                            await SendPacketAsync(response); // Gọi hàm gửi mảng byte có lengthPrefix của fen
+                        }
+
+                        // 2. NHÁNH XỬ LÝ LAZY LOADING CÀO THƯ MỤC CON THEO ĐƯỜNG DẪN YÊU CẦU
+                        else if (packet.Type == "GET_DIRECTORY")
+                        {
+                            string targetPath = packet.Data; // Đường dẫn Server muốn cào (Ví dụ: C:\Users)
+                            var dirContent = new RemoteDirectoryContent();
+
+                            try
+                            {
+                                if (System.IO.Directory.Exists(targetPath))
+                                {
+                                    // Lấy danh sách thư mục con
+                                    foreach (var dir in System.IO.Directory.GetDirectories(targetPath))
+                                    {
+                                        var info = new System.IO.DirectoryInfo(dir);
+                                        if ((info.Attributes & System.IO.FileAttributes.Hidden) == 0) // Bỏ qua file ẩn
+                                        {
+                                            dirContent.SubFolders.Add(info.FullName);
+                                        }
+                                    }
+                                    // Lấy danh sách tập tin con
+                                    foreach (var file in System.IO.Directory.GetFiles(targetPath))
+                                    {
+                                        var info = new System.IO.FileInfo(file);
+                                        if ((info.Attributes & System.IO.FileAttributes.Hidden) == 0)
+                                        {
+                                            dirContent.Files.Add(info.FullName);
+                                        }
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                dirContent.ErrorMessage = ex.Message; // Trả về lỗi nếu thư mục bị chặn quyền (Access Denied)
+                            }
+
+                            SocketPacket response = new SocketPacket
+                            {
+                                Type = "GET_DIRECTORY_RESPONSE",
+                                AgentID = packet.AgentID,
+                                Data = System.Text.Json.JsonSerializer.Serialize(dirContent)
+                            };
+                            await SendPacketAsync(response);
+                        }
+
+
+                        // Kế hoạch xử lý các lệnh: BROWSE_DRIVES, COPY_FILE... sẽ nằm ở đây
+                    }
+                }
+            }
+            catch
+            {
+                // Gặp lỗi ngắt kết nối
+            }
+            finally
+            {
+                _isConnected = false;
+                _logger?.LogWarning("Mất kết nối tới Server. Đã kích hoạt trạng thái chờ Reconnect...");
+            }
+        }*/
+
         private async Task ListenToServerAsync(CancellationToken token)
         {
             byte[] sizeBuffer = new byte[4];
@@ -356,13 +495,103 @@ namespace AgentService
                     if (packet != null)
                     {
                         _logger?.LogInformation("Nhận lệnh từ Server: {Type}", packet.Type);
-                        // Kế hoạch xử lý các lệnh: BROWSE_DRIVES, COPY_FILE... sẽ nằm ở đây
+
+                        // ====================================================================
+                        // 1. LUỒNG CÀO Ổ ĐĨA: GỘP CHUNG VỀ CHUẨN "BROWSE_DRIVES" CHO ĐỒNG BỘ UI
+                        // ====================================================================
+                        if (packet.Type == "BROWSE_DRIVES" || packet.Type == "GET_DRIVES")
+                        {
+                            _logger?.LogInformation("Thực hiện cào danh sách ổ đĩa hệ thống...");
+
+                            var driveList = new System.Collections.Generic.List<string>();
+                            foreach (var drive in System.IO.DriveInfo.GetDrives())
+                            {
+                                if (drive.IsReady)
+                                {
+                                    driveList.Add(drive.Name); // Trả về dạng "C:\", "D:\"
+                                }
+                            }
+
+                            SocketPacket response = new SocketPacket
+                            {
+                                Type = "BROWSE_DRIVES_RESPONSE", // Thống nhất dùng chung một loại Response này
+                                AgentID = packet.AgentID,
+                                Data = System.Text.Json.JsonSerializer.Serialize(driveList)
+                            };
+
+                            await SendPacketAsync(response); // Dùng luôn hàm SendPacketAsync cho sạch code
+                        }
+
+                        // ====================================================================
+                        // 2. LUỒNG CÀO THƯ MỤC LAZY LOADING: TỐI ƯU TỐC ĐỘ, ĐỒNG BỘ KIỂU LỆNH
+                        // ====================================================================
+                        else if (packet.Type == "GET_DIRECTORY" || packet.Type == "BROWSE_FOLDER")
+                        {
+                            string targetPath = packet.Data; // Đường dẫn cần cào (Ví dụ: C:\ hoặc C:\Users)
+                            _logger?.LogInformation("Tiến hành cào nhanh thư mục: {Path}", targetPath);
+
+                            var dirContent = new RemoteDirectoryContent();
+
+                            try
+                            {
+                                if (System.IO.Directory.Exists(targetPath))
+                                {
+                                    // TỐI ƯU HIỆU SUẤT X5: Dùng Enumerate Thay vì Get để lấy đến đâu trả đến đó, không ngâm RAM
+
+                                    // Cào thư mục con nhanh
+                                    var dirs = System.IO.Directory.EnumerateDirectories(targetPath);
+                                    foreach (var dir in dirs)
+                                    {
+                                        try
+                                        {
+                                            var info = new System.IO.DirectoryInfo(dir);
+                                            // Bỏ qua thư mục ẩn/hệ thống để tránh bị từ chối quyền (Access Denied) làm chậm luồng
+                                            if ((info.Attributes & System.IO.FileAttributes.Hidden) == 0 &&
+                                                (info.Attributes & System.IO.FileAttributes.System) == 0)
+                                            {
+                                                dirContent.SubFolders.Add(info.FullName);
+                                            }
+                                        }
+                                        catch { /* Bỏ qua các folder lỗi quyền riêng lẻ để tiếp tục vòng lặp */ }
+                                    }
+
+                                    // Cào tập tin con nhanh
+                                    var files = System.IO.Directory.EnumerateFiles(targetPath);
+                                    foreach (var file in files)
+                                    {
+                                        try
+                                        {
+                                            var info = new System.IO.FileInfo(file);
+                                            if ((info.Attributes & System.IO.FileAttributes.Hidden) == 0)
+                                            {
+                                                dirContent.Files.Add(info.FullName);
+                                            }
+                                        }
+                                        catch { }
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                dirContent.ErrorMessage = ex.Message; // Trả lỗi phân quyền tổng quát nếu có
+                            }
+
+                            SocketPacket response = new SocketPacket
+                            {
+                                Type = "GET_DIRECTORY_RESPONSE",
+                                AgentID = packet.AgentID,
+                                Data = System.Text.Json.JsonSerializer.Serialize(dirContent)
+                            };
+
+                            await SendPacketAsync(response);
+                            _logger?.LogInformation("Đã phản hồi dữ liệu cấu trúc thư mục về Server.");
+                        }
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Gặp lỗi ngắt kết nối
+                _logger?.LogError("Lỗi trong luồng lắng nghe lệnh: {Message}", ex.Message);
             }
             finally
             {

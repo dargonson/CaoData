@@ -29,7 +29,6 @@
         private void InitializeComponent()
         {
             panelHeader = new Panel();
-            btnLietKe = new Button();
             btnKetNoi = new Button();
             btnCopy = new Button();
             brndel = new Button();
@@ -49,7 +48,6 @@
             // 
             // panelHeader
             // 
-            panelHeader.Controls.Add(btnLietKe);
             panelHeader.Controls.Add(btnKetNoi);
             panelHeader.Controls.Add(btnCopy);
             panelHeader.Controls.Add(brndel);
@@ -59,16 +57,6 @@
             panelHeader.Name = "panelHeader";
             panelHeader.Size = new Size(1461, 60);
             panelHeader.TabIndex = 0;
-            // 
-            // btnLietKe
-            // 
-            btnLietKe.Location = new Point(864, 4);
-            btnLietKe.Name = "btnLietKe";
-            btnLietKe.Size = new Size(113, 53);
-            btnLietKe.TabIndex = 0;
-            btnLietKe.Text = "Lêtij kê";
-            btnLietKe.UseVisualStyleBackColor = true;
-            btnLietKe.Click += btnLietKe_Click;
             // 
             // btnKetNoi
             // 
@@ -127,6 +115,7 @@
             ListboxAgents.SelectedCardColor = Color.FromArgb(205, 220, 242);
             ListboxAgents.Size = new Size(308, 601);
             ListboxAgents.TabIndex = 4;
+            ListboxAgents.SelectedIndexChanged += ListboxAgents_SelectedIndexChanged;
             // 
             // panelZone2
             // 
@@ -211,7 +200,6 @@
         private Button brndel;
         private Button btnCopy;
         private Button btnKetNoi;
-        private Button btnLietKe;
         private NHFUiControls.ListBoxNHF lvAgents;
         private NHFUiControls.ListBoxNHF ListboxAgents;
     }
