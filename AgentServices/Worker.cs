@@ -9,6 +9,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using AgentShared;
+using System.Management;
 using System.Windows.Forms;
 // Dùng chung định dạng gói tin với Server
 
@@ -32,6 +33,122 @@ namespace AgentService
             _logger = logger;
             _configuration = configuration;
         }
+
+
+
+
+        // Hãy dán hàm phụ trợ này vào bất kỳ vị trí trống nào trong lòng class Worker : BackgroundService
+        private AgentInfo CollectSystemInfo()
+        {
+            string machineName = Environment.MachineName;
+            string username = Environment.UserName;
+            string osVersion = "Windows Unknown";
+            var os = Environment.OSVersion;
+
+            if (os.Platform == PlatformID.Win32NT)
+            {
+                // Dựa vào cơ chế quản lý phiên bản của Microsoft để lọc tên thương mại
+                switch (os.Version.Major)
+                {
+                    case 10:
+                        // Từ Build 22000 trở lên Microsoft chính thức gọi là Windows 11
+                        if (os.Version.Build >= 22000)
+                            osVersion = "Windows 11";
+                        else
+                            osVersion = "Windows 10";
+                        break;
+                    case 6:
+                        switch (os.Version.Minor)
+                        {
+                            case 3: osVersion = "Windows 8.1"; break;
+                            case 2: osVersion = "Windows 8"; break;
+                            case 1: osVersion = "Windows 7"; break;
+                            case 0: osVersion = "Windows Vista"; break;
+                        }
+                        break;
+                    case 5:
+                        osVersion = "Windows XP";
+                        break;
+                }
+            }
+
+            // 1. Cào thông tin phần cứng vật lý cứng (Mainboard & CPU) để tạo ID bất tử
+            string hardwareRawData = "";
+            try
+            {
+                // Lấy mã Serial của Bo mạch chủ (Mainboard)
+                using (ManagementObjectSearcher mos = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BaseBoard"))
+                {
+                    foreach (ManagementObject mo in mos.Get())
+                    {
+                        hardwareRawData += mo["SerialNumber"]?.ToString() ?? "";
+                    }
+                }
+
+                // Lấy mã ID của Chip xử lý (CPU ID)
+                using (ManagementObjectSearcher mos = new ManagementObjectSearcher("SELECT ProcessorId FROM Win3er_Processor"))
+                {
+                    foreach (ManagementObject mo in mos.Get())
+                    {
+                        hardwareRawData += mo["ProcessorId"]?.ToString() ?? "";
+                    }
+                }
+            }
+            catch
+            {
+                // Phòng hờ nếu phân quyền máy lỗi không đọc được WMI, lấy tạm thông tin MacAddress làm phương án dự phòng
+                hardwareRawData = machineName;
+            }
+
+            // Nếu chuỗi cào được quá ngắn hoặc trống, đắp thêm chuỗi dự phòng chống lỗi
+            if (string.IsNullOrWhiteSpace(hardwareRawData) || hardwareRawData.Length < 5)
+            {
+                hardwareRawData += "NHF-AGENT-DEFAULT-HARDWARE-STRING";
+            }
+
+            // 2. Mã hóa MD5 chuỗi phần cứng để tạo ra một chuỗi Hex cố định, duy nhất
+            string agentId = "";
+            using (System.Security.Cryptography.MD5 md5 = System.Security.Cryptography.MD5.Create())
+            {
+                byte[] hashBytes = md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes(hardwareRawData));
+                string hashString = BitConverter.ToString(hashBytes).Replace("-", "").ToUpper(); // Chuỗi dạng HEX viết hoa
+
+                // 3. Định dạng chuỗi theo đúng chuẩn xxxxx-xxxxx (10 ký tự, phân tách ở giữa)
+                string part1 = hashString.Substring(0, 5);
+                string part2 = hashString.Substring(5, 5);
+                agentId = $"{part1}-{part2}"; // Kết quả: XXXXX-XXXXX
+            }
+
+            return new AgentInfo
+            {
+                AgentID = agentId, // Mã 10 ký tự bất tử đã được gán vào đây
+                MachineName = machineName,
+                Username = username,
+                IPAddress = GetLocalIPAddress(), // Gọi hàm lấy IP LAN
+                OSVersion = osVersion,
+                AgentVersion = "1.0.0"
+            };
+            MessageBox.Show(osVersion);
+        }
+
+        // Hàm phụ trợ lấy IP LAN gọn gàng cho fen
+        private string GetLocalIPAddress()
+        {
+            try
+            {
+                var host = System.Net.Dns.GetHostEntry(System.Net.Dns.GetHostName());
+                foreach (var ip in host.AddressList)
+                {
+                    if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                    {
+                        return ip.ToString();
+                    }
+                }
+            }
+            catch { }
+            return "127.0.0.1";
+        }
+
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
@@ -78,7 +195,7 @@ namespace AgentService
                             _reconnectIndex = 0; // Reset lại chu kỳ chờ reconnect về mức 5s
 
                             // Đăng ký thông tin máy với Server ngay khi vừa kết nối
-                            await SendRegisterInfoAsync(agentID);
+                            await SendRegisterInfoAsync();
 
                             // Kích hoạt luồng gửi Tim Mạch (Heartbeat) song song định kỳ 30 giây
                             _ = StartHeartbeatLoopAsync(agentID, stoppingToken);
@@ -152,28 +269,43 @@ namespace AgentService
         }
 
         // Tính năng số 1: Gửi thông tin máy cho Server
-        private async Task SendRegisterInfoAsync(string agentID)
+        private async Task SendRegisterInfoAsync()
         {
-            var info = new AgentInfo
+            try
             {
-                MachineName = Environment.MachineName,
-                Username = Environment.UserName,
-                IPAddress = "172.16.16.10", // Tạm thời lấy mồi, sau này viết hàm quét IP tự động
-                OSVersion = Environment.OSVersion.ToString(),
-                AgentVersion = "1.0.0"
-            };
+                // 1. Tự lấy thông tin máy
+                AgentInfo myInfo = CollectSystemInfo();
 
-            var packet = new SocketPacket
+                // 2. Đóng gói payload chi tiết của Agent thành chuỗi JSON
+                string jsonPayload = System.Text.Json.JsonSerializer.Serialize(myInfo);
+
+                // 3. Khởi tạo gói tin KHỚP 100% cấu trúc class SocketPacket của fen
+                SocketPacket registerPacket = new SocketPacket
+                {
+                    Type = "REGISTER",
+                    AgentID = myInfo.AgentID, // Điền luôn mã định danh máy con vào vỏ gói tin
+                    Data = jsonPayload        // Điền chuỗi JSON thông tin chi tiết vào thuộc tính Data kiểu string
+                };
+
+                // 4. Chuỗi hóa toàn bộ gói tin để gửi qua Socket
+                string jsonString = System.Text.Json.JsonSerializer.Serialize(registerPacket);
+                byte[] dataBuffer = System.Text.Encoding.UTF8.GetBytes(jsonString);
+                byte[] lengthPrefix = BitConverter.GetBytes(dataBuffer.Length);
+
+                // 5. Bắn qua luồng mạng Socket
+                if (_stream != null && _stream.CanWrite)
+                {
+                    await _stream.WriteAsync(lengthPrefix, 0, lengthPrefix.Length);
+                    await _stream.WriteAsync(dataBuffer, 0, dataBuffer.Length);
+                    await _stream.FlushAsync();
+
+                    _logger?.LogInformation("Đã gửi gói REGISTER đăng ký thông tin máy lên Server thành công.");
+                }
+            }
+            catch (Exception ex)
             {
-                Type = "REGISTER",
-                AgentID = agentID,
-                Data = JsonSerializer.Serialize(info)
-            };
-
-            await SendPacketAsync(packet);
-            _logger?.LogInformation("Đã gửi gói tin đăng ký REGISTER lên Server.");
-            
-            
+                _logger?.LogError("Lỗi khi gửi gói REGISTER: {Message}", ex.Message);
+            }
         }
 
         // Tính năng số 7: Vòng lặp bắn Tim Mạch (Heartbeat) 30 giây một lần

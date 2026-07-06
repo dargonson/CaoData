@@ -1,0 +1,10 @@
+## Visual Studio các file rác tự sinh
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Thư mục Build xuất bản code
+bin/
+obj/

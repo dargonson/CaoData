@@ -10,3 +10,16 @@ C:\Users\DoThai\Desktop\AgentShared\obj\Debug\net8.0-windows\refint\AgentShared.
 C:\Users\DoThai\Desktop\AgentShared\obj\Debug\net8.0-windows\AgentShared.pdb
 C:\Users\DoThai\Desktop\AgentShared\obj\Debug\net8.0-windows\ref\AgentShared.dll
 C:\Users\DoThai\Desktop\AgentShared\obj\Debug\net8.0-windows\AgentShared.csproj.AssemblyReference.cache
+C:\Users\DoThai\Desktop\repoC#\AgentShared\bin\Debug\net8.0-windows\AgentShared.deps.json
+C:\Users\DoThai\Desktop\repoC#\AgentShared\bin\Debug\net8.0-windows\AgentShared.dll
+C:\Users\DoThai\Desktop\repoC#\AgentShared\bin\Debug\net8.0-windows\AgentShared.pdb
+C:\Users\DoThai\Desktop\repoC#\AgentShared\obj\Debug\net8.0-windows\AgentShared.csproj.AssemblyReference.cache
+C:\Users\DoThai\Desktop\repoC#\AgentShared\obj\Debug\net8.0-windows\AgentShared.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\DoThai\Desktop\repoC#\AgentShared\obj\Debug\net8.0-windows\AgentShared.AssemblyInfoInputs.cache
+C:\Users\DoThai\Desktop\repoC#\AgentShared\obj\Debug\net8.0-windows\AgentShared.AssemblyInfo.cs
+C:\Users\DoThai\Desktop\repoC#\AgentShared\obj\Debug\net8.0-windows\AgentShared.csproj.CoreCompileInputs.cache
+C:\Users\DoThai\Desktop\repoC#\AgentShared\obj\Debug\net8.0-windows\AgentShared.sourcelink.json
+C:\Users\DoThai\Desktop\repoC#\AgentShared\obj\Debug\net8.0-windows\AgentShared.dll
+C:\Users\DoThai\Desktop\repoC#\AgentShared\obj\Debug\net8.0-windows\refint\AgentShared.dll
+C:\Users\DoThai\Desktop\repoC#\AgentShared\obj\Debug\net8.0-windows\AgentShared.pdb
+C:\Users\DoThai\Desktop\repoC#\AgentShared\obj\Debug\net8.0-windows\ref\AgentShared.dll

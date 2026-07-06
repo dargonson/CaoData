@@ -63,7 +63,7 @@ namespace AgentControl
         private async void Form1_Load(object sender, EventArgs e)
         {
             ListboxAgents.AddAgent("PC-NHF-01", "Administrator", "192.168.1.15", "Windows 11", "adsadsads", true);
-            ListboxAgents.ItemHeight = 140;
+            ListboxAgents.ItemHeight = 123;
             shellImages.ImageSize = new Size(16, 16);
             shellImages.ColorDepth = ColorDepth.Depth32Bit;
             tvRemoteFolders.ImageList = shellImages;
@@ -674,41 +674,28 @@ namespace AgentControl
 
         private async Task LoadAllAgentsFromDbAsync()
         {
-            // 1. Xóa sạch danh sách hiển thị cũ trên ListView (Vùng 1) trước khi nạp mới
-            //ListboxAgents.Items.Clear();
+            // 1. Xóa sạch danh sách hiển thị cũ trên ListboxAgents trước khi nạp mới
+            ListboxAgents.Items.Clear();
 
             // 2. Kéo toàn bộ danh sách Agent đã lưu từ file SQLite lên
             var dbAgents = await SQLiteHelper.GetAllAgentsAsync();
 
-            // 3. Duyệt qua từng Agent lấy từ DB để đổ lên giao diện
+            // 3. Duyệt qua từng Agent lấy từ DB để đổ lên giao diện [cite: 3522]
             foreach (var agent in dbAgents)
             {
-                // Kiểm tra trạng thái để gán chữ hiển thị tương ứng
-                string statusText = agent["Status"] == "Online" ? "✔ Online" : "❌ Offline";
+                bool isOnlineStatus = agent["Status"] == "Online";
 
-                ListViewItem item = new ListViewItem(statusText);
-                item.SubItems.Add(agent["MachineName"]);
-                item.SubItems.Add(agent["Username"]);
-                item.SubItems.Add(agent["IPAddress"]);
-                item.SubItems.Add(agent["OSVersion"]);
-                item.SubItems.Add($"Version: {agent["AgentVersion"]}");
-
-                // Cất giấu AgentID vào thuộc tính Tag của dòng đó để sau này click vào biết là máy nào
-                item.Tag = agent["AgentID"];
-
-                // Tút tát màu sắc: Nếu Offline thì đổi chữ sang màu xám, Online thì chữ màu xanh
-                if (agent["Status"] == "Offline")
-                {
-                    item.ForeColor = System.Drawing.Color.Gray;
-                }
-                else
-                {
-                    item.ForeColor = System.Drawing.Color.Green;
-                }
-                // Đẩy dòng này vào ListView Vùng 1
-                //lvAgents.Items.Add(item);
+            // Gọi đúng hàm custom của fen để nạp dữ liệu 
+            ListboxAgents.AddAgent(
+            agent["MachineName"],
+            agent["Username"],
+            agent["IPAddress"],
+            agent["OSVersion"],
+            agent["AgentID"],
+            isOnlineStatus
+            );
             }
         }
-   
+
     }
 }

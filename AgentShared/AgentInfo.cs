@@ -4,6 +4,7 @@ namespace AgentShared
 {
     public class AgentInfo
     {
+        public string AgentID { get; set; }
         public string MachineName { get; set; } = string.Empty; // Tên máy (e.g., DOTHAI-LT)
         public string Username { get; set; } = string.Empty;    // Tên User hệ điều hành (e.g., DOTHAI)
         public string IPAddress { get; set; } = string.Empty;   // IP của Agent (e.g., 172.16.16.10)
