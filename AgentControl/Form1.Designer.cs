@@ -76,6 +76,7 @@
             btnCopy.TabIndex = 1;
             btnCopy.Text = "Copy";
             btnCopy.UseVisualStyleBackColor = true;
+            btnCopy.Click += btnCopy_Click;
             // 
             // brndel
             // 

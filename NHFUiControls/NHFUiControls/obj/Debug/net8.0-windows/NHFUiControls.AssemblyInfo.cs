@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("NHFUiControls")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+1530beba3aae19c452f534749749f440b4c9831d")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ffebbef9470ff863563a614697f8e83fad44a66e")]
 [assembly: System.Reflection.AssemblyProductAttribute("NHFUiControls")]
 [assembly: System.Reflection.AssemblyTitleAttribute("NHFUiControls")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

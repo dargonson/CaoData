@@ -46,11 +46,12 @@ namespace AgentShared
     // 4. Gói tin chứa mảnh dữ liệu cắt nhỏ (Agent -> Server)
     public class FileChunkPacket
     {
-        public string TaskID { get; set; } = string.Empty;
-        public long ChunkIndex { get; set; }       // Vị trí thứ tự của mảnh dữ liệu
-        public int ChunkSize { get; set; }         // Kích thước của mảnh này (Bytes)
-        public string Base64Data { get; set; } = string.Empty; // Dữ liệu nhị phân băm ra chuỗi an toàn
-        public bool IsLastChunk { get; set; }      // Đã tới mảnh cuối cùng chưa?
-        public string FileHash { get; set; } = string.Empty;   // Mã SHA256/CRC32 gửi ở mảnh cuối để check lỗi
+        public string DownloadID { get; set; } = string.Empty;   // Mã GUID định danh luồng tải này
+        public string RemotePath { get; set; } = string.Empty;   // Đường dẫn file trên Agent
+        public long TotalBytes { get; set; }                    // Tổng kích thước file
+        public long Offset { get; set; }                        // Vị trí bắt đầu đọc file (Dùng cho cả Resume)
+        public int ChunkSize { get; set; }                      // Độ dài thực của mảng byte đợt này
+        public bool IsLastChunk { get; set; }                   // Đánh dấu đây có phải khúc cuối cùng chưa
+        public string Base64Data { get; set; } = string.Empty;  // Dữ liệu nhị phân băm nhỏ đã chuyển sang chuỗi Base64
     }
 }

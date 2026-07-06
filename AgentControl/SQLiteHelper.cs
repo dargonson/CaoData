@@ -21,41 +21,54 @@ namespace AgentControl
             {
                 await connection.OpenAsync();
 
-                // 1. Tạo bảng quản lý thông tin các Agent
+                // 1. Tạo bảng quản lý thông tin các Agent (Giữ nguyên cấu trúc chuẩn của fen)
                 string createAgentsTable = @"
-                    CREATE TABLE IF NOT EXISTS Agents (
-                        AgentID TEXT PRIMARY KEY,
-                        MachineName TEXT,
-                        Username TEXT,
-                        IPAddress TEXT,
-                        OSVersion TEXT,
-                        AgentVersion TEXT,
-                        FirstConnectTime TEXT,
-                        LastSeen TEXT,
-                        Status TEXT DEFAULT 'Offline'
-                    );";
+            CREATE TABLE IF NOT EXISTS Agents (
+                AgentID TEXT PRIMARY KEY,
+                MachineName TEXT,
+                Username TEXT,
+                IPAddress TEXT,
+                OSVersion TEXT,
+                AgentVersion TEXT,
+                FirstConnectTime TEXT,
+                LastSeen TEXT,
+                Status TEXT DEFAULT 'Offline'
+            );";
 
-                // 2. Tạo bảng lưu Log lịch sử sao chép file
+                // 2. Tạo bảng lưu Log hệ thống (Giữ nguyên tên bảng Logs chuẩn ban đầu của fen)
                 string createLogsTable = @"
-                    CREATE TABLE IF NOT EXISTS TransferLogs (
-                        LogID INTEGER PRIMARY KEY AUTOINCREMENT,
-                        Timestamp TEXT,
-                        AgentID TEXT,
-                        ActionType TEXT,
-                        FileName TEXT,
-                        Status TEXT,
-                        FileSize TEXT,
-                        Duration TEXT
-                    );";
+            CREATE TABLE IF NOT EXISTS Logs (
+                ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                LogTime TEXT,
+                LogType TEXT,
+                Message TEXT
+            );";
 
-                using (var command = new SQLiteCommand(createAgentsTable, connection))
-                {
-                    await command.ExecuteNonQueryAsync();
-                }
+                // 3. THÊM MỚI: Bảng quản lý Hàng đợi Download (Phục vụ Resume & hàng đợi)
+                string createDownloadQueueTable = @"
+            CREATE TABLE IF NOT EXISTS DownloadQueue (
+                DownloadID TEXT PRIMARY KEY,       
+                AgentID TEXT,                    
+                RemotePath TEXT,                  
+                LocalPath TEXT,                   
+                TotalBytes INTEGER DEFAULT 0,     
+                DownloadedBytes INTEGER DEFAULT 0,
+                Status TEXT DEFAULT 'Waiting',    
+                CreatedTime TEXT,                 
+                UpdatedTime TEXT                  
+            );";
 
-                using (var command = new SQLiteCommand(createLogsTable, connection))
+                // Gom hết vào 1 bộ cmd chạy tuần tự là sạch đẹp nhất
+                using (var cmd = new SQLiteCommand(connection))
                 {
-                    await command.ExecuteNonQueryAsync();
+                    cmd.CommandText = createAgentsTable;
+                    await cmd.ExecuteNonQueryAsync();
+
+                    cmd.CommandText = createLogsTable;
+                    await cmd.ExecuteNonQueryAsync();
+
+                    cmd.CommandText = createDownloadQueueTable;
+                    await cmd.ExecuteNonQueryAsync();
                 }
             }
         }
@@ -156,6 +169,101 @@ namespace AgentControl
                 }
             }
             return agentList;
+        }
+        public static async Task AddToDownloadQueueAsync(string downloadId, string agentId, string remotePath, string localPath, long totalBytes)
+        {
+            using (var connection = new SQLiteConnection(ConnectionString))
+            {
+                await connection.OpenAsync();
+                string insertQuery = @"
+            INSERT INTO DownloadQueue (DownloadID, AgentID, RemotePath, LocalPath, TotalBytes, DownloadedBytes, Status, CreatedTime, UpdatedTime)
+            VALUES (@DownloadID, @AgentID, @RemotePath, @LocalPath, @TotalBytes, 0, 'Waiting', @Time, @Time);";
+
+                using (var cmd = new SQLiteCommand(insertQuery, connection))
+                {
+                    cmd.Parameters.AddWithValue("@DownloadID", downloadId);
+                    cmd.Parameters.AddWithValue("@AgentID", agentId);
+                    cmd.Parameters.AddWithValue("@RemotePath", remotePath);
+                    cmd.Parameters.AddWithValue("@LocalPath", localPath);
+                    cmd.Parameters.AddWithValue("@TotalBytes", totalBytes);
+                    cmd.Parameters.AddWithValue("@Time", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                    await cmd.ExecuteNonQueryAsync();
+                }
+            }
+        }
+
+        // Hàm cập nhật tiến độ (số byte đã tải về ổ cứng) theo thời gian thực
+        public static async Task UpdateDownloadProgressAsync(string downloadId, long downloadedBytes, string status)
+        {
+            using (var connection = new SQLiteConnection(ConnectionString))
+            {
+                await connection.OpenAsync();
+                string updateQuery = @"
+            UPDATE DownloadQueue 
+            SET DownloadedBytes = @DownloadedBytes, 
+                Status = @Status, 
+                UpdatedTime = @Time 
+            WHERE DownloadID = @DownloadID;";
+
+                using (var cmd = new SQLiteCommand(updateQuery, connection))
+                {
+                    cmd.Parameters.AddWithValue("@DownloadID", downloadId);
+                    cmd.Parameters.AddWithValue("@DownloadedBytes", downloadedBytes);
+                    cmd.Parameters.AddWithValue("@Status", status);
+                    cmd.Parameters.AddWithValue("@Time", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                    await cmd.ExecuteNonQueryAsync();
+                }
+            }
+        }
+
+        // Hàm lấy thông tin một file để kiểm tra trạng thái Resume (Xem byte đã tải trước đó)
+        public static async Task<long> GetDownloadedBytesOffsetAsync(string downloadId)
+        {
+            using (var connection = new SQLiteConnection(ConnectionString))
+            {
+                await connection.OpenAsync();
+                string selectQuery = "SELECT DownloadedBytes FROM DownloadQueue WHERE DownloadID = @DownloadID;";
+
+                using (var cmd = new SQLiteCommand(selectQuery, connection))
+                {
+                    cmd.Parameters.AddWithValue("@DownloadID", downloadId);
+                    var result = await cmd.ExecuteScalarAsync();
+                    return result != null ? Convert.ToInt64(result) : 0;
+                }
+            }
+        }
+        public static async Task<string> GetLocalPathByDownloadIdAsync(string downloadId)
+        {
+            using (var connection = new SQLiteConnection(ConnectionString))
+            {
+                await connection.OpenAsync();
+                string selectQuery = "SELECT LocalPath FROM DownloadQueue WHERE DownloadID = @DownloadID;";
+                using (var cmd = new SQLiteCommand(selectQuery, connection))
+                {
+                    cmd.Parameters.AddWithValue("@DownloadID", downloadId);
+                    var result = await cmd.ExecuteScalarAsync();
+                    return result != null ? result.ToString() : string.Empty;
+                }
+            }
+        }
+        public static async Task SaveLogAsync(string logType, string message)
+        {
+            using (var connection = new SQLiteConnection(ConnectionString))
+            {
+                await connection.OpenAsync();
+                // Ghi chuẩn chỉ vào đúng bảng Logs của fen đang có sẵn
+                string insertLogQuery = @"
+            INSERT INTO Logs (LogTime, LogType, Message) 
+            VALUES (@LogTime, @LogType, @Message);";
+
+                using (var cmd = new SQLiteCommand(insertLogQuery, connection))
+                {
+                    cmd.Parameters.AddWithValue("@LogTime", DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss"));
+                    cmd.Parameters.AddWithValue("@LogType", logType);
+                    cmd.Parameters.AddWithValue("@Message", message);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+            }
         }
     }
 }

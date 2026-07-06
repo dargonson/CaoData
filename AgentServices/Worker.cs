@@ -499,6 +499,99 @@ namespace AgentService
                         // ====================================================================
                         // 1. LUỒNG CÀO Ổ ĐĨA: GỘP CHUNG VỀ CHUẨN "BROWSE_DRIVES" CHO ĐỒNG BỘ UI
                         // ====================================================================
+
+
+                        // --- TÍCH HỢP VÀO VÒNG LẶP ĐỌC SOCKET CỦA AGENT ---
+
+                        if (packet.Type == "REQUEST_DOWNLOAD")
+                        {
+                            if (!string.IsNullOrEmpty(packet.Data))
+                            {
+                                // Khởi chạy một luồng Task độc lập để băm file, tránh làm nghẽn mạch Socket chính của Agent
+                                _ = Task.Run(async () =>
+                                {
+                                    try
+                                    {
+                                        // 1. Giải mã gói yêu cầu từ Server
+                                        var request = JsonSerializer.Deserialize<DownloadRequestModel>(packet.Data);
+                                        if (request == null) return;
+
+                                        string filePath = request.RemotePath;
+
+                                        // 2. Kiểm tra xem file ngoài đời thực có tồn tại không [cite: 12]
+                                        if (!File.Exists(filePath))
+                                        {
+                                            // Nếu không tồn tại file, fen có thể bắn một gói tin báo lỗi về Server (tùy chọn)
+                                            return;
+                                        }
+
+                                        FileInfo fileInfo = new FileInfo(filePath);
+                                        long totalBytes = fileInfo.Length;
+                                        long currentOffset = request.Offset; // Vị trí bắt đầu đọc (VD: 0 nếu tải mới, hoặc X bytes nếu Resume)
+
+                                        // Định nghĩa kích thước mỗi khối băm nhỏ (Buffer Size = 256KB tăng tốc độ truyền tải)
+                                        int bufferSize = 256 * 1024;
+                                        byte[] buffer = new byte[bufferSize];
+
+                                        // 3. Mở FileStream chế độ Read và Share để đọc cuốn chiếu, không khóa file hệ thống
+                                        using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                                        {
+                                            // Nhảy cóc đến vị trí Offset được yêu cầu 
+                                            fs.Seek(currentOffset, SeekOrigin.Begin);
+
+                                            int bytesRead;
+                                            // Vòng lặp đọc file cuốn chiếu cho đến hết 
+                                            while ((bytesRead = await fs.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                                            {
+                                                // Trích xuất mảng byte thực tế đọc được từ file
+                                                byte[] actualBytes = new byte[bytesRead];
+                                                Buffer.BlockCopy(buffer, 0, actualBytes, 0, bytesRead);
+
+                                                // Đóng gói dữ liệu sang mô hình FileChunkPacket
+                                                var chunk = new FileChunkPacket
+                                                {
+                                                    DownloadID = request.DownloadID,
+                                                    RemotePath = filePath,
+                                                    TotalBytes = totalBytes,
+                                                    Offset = currentOffset,
+                                                    ChunkSize = bytesRead,
+                                                    IsLastChunk = (currentOffset + bytesRead >= totalBytes), // Đánh dấu nếu là mảnh cuối [cite: 15]
+                                                    Base64Data = Convert.ToBase64String(actualBytes) // Chuyển sang Base64 để nhét vào chuỗi JSON [cite: 17]
+                                                };
+
+                                                // Gói vào SocketPacket chung để bắn lên mạng 
+                                                SocketPacket chunkPacket = new SocketPacket
+                                                {
+                                                    Type = "DOWNLOAD_CHUNK",
+                                                    AgentID = packet.AgentID, // Trả ngược lại đúng ID của Agent này
+                                                    Data = JsonSerializer.Serialize(chunk)
+                                                };
+
+                                                // Chuỗi hóa gói tin và bọc 4 bytes độ dài đầu gói chống dính tin
+                                                string jsonString = JsonSerializer.Serialize(chunkPacket);
+                                                byte[] dataBuffer = Encoding.UTF8.GetBytes(jsonString);
+                                                byte[] lengthPrefix = BitConverter.GetBytes(dataBuffer.Length);
+
+                                                // Bắn lên Server qua luồng NetworkStream ngầm của Agent
+                                                // Lưu ý: Biến 'stream' ở đây là NetworkStream kết nối của Agent tới Server nhé fen
+                                                await SendPacketAsync(chunkPacket);
+
+                                                // Cập nhật lại vị trí dịch chuyển tiếp theo [cite: 6]
+                                                currentOffset += bytesRead;
+
+                                                // Mẹo nhỏ: Thêm một khoảng Delay cực ngắn (1-2ms) nếu muốn giảm tải CPU cho máy Agent khi tải file quá lớn
+                                                // await Task.Delay(1); 
+                                            }
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Console.WriteLine($"Lỗi băm file phía Agent: {ex.Message}");
+                                    }
+                                });
+                            }
+                        }
+
                         if (packet.Type == "BROWSE_DRIVES" || packet.Type == "GET_DRIVES")
                         {
                             _logger?.LogInformation("Thực hiện cào danh sách ổ đĩa hệ thống...");
