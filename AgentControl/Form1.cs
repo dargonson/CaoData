@@ -17,7 +17,7 @@ namespace AgentControl
         private bool _isListening = false;
         // Quản lý danh sách kết nối: key là AgentID, Value gồm TcpClient và thời gian LastSeen
         private ConcurrentDictionary<string, (TcpClient Client, DateTime LastSeen)> _connectedAgents = new ConcurrentDictionary<string, (TcpClient, DateTime)>();
-        
+        private DateTime _lastUiUpdate = DateTime.MinValue;
         public Form1()
         {
             InitializeComponent();
@@ -65,7 +65,7 @@ namespace AgentControl
         }
         private async void Form1_Load(object sender, EventArgs e)
         {
-            ListboxAgents.AddAgent("PC-NHF-01", "Administrator", "192.168.1.15", "Windows 11", "adsadsads", true);
+            //ListboxAgents.AddAgent("PC-NHF-01", "Administrator", "192.168.1.15", "Windows 11", "adsadsads", true);
             ListboxAgents.ItemHeight = 123;
             shellImages.ImageSize = new Size(16, 16);
             shellImages.ColorDepth = ColorDepth.Depth32Bit;
@@ -250,47 +250,58 @@ namespace AgentControl
                             {
                                 if (!string.IsNullOrEmpty(packet.Data))
                                 {
-                                    try
+                                    // 🌟 GIẢI PHÁP VÀNG: Đẩy toàn bộ tác vụ IO nặng (Ghi file, Base64, SQLite) ra luồng xử lý ngầm biệt lập
+                                    _ = Task.Run(async () =>
                                     {
-                                        var chunk = JsonSerializer.Deserialize<FileChunkPacket>(packet.Data);
-                                        if (chunk != null)
+                                        try
                                         {
-                                            // Vì Agent gửi gói tin chỉ kèm DownloadID hoặc FileName, 
-                                            // Ta cần lấy chính xác đường dẫn LocalPath lưu trên máy Server đã đăng ký trong SQLite
-                                            string localPath = await SQLiteHelper.GetLocalPathByDownloadIdAsync(chunk.DownloadID);
-
-                                            if (string.IsNullOrEmpty(localPath)) return; // Nếu không tìm thấy phiên tải thì bỏ qua
-
-                                            byte[] realBytes = Convert.FromBase64String(chunk.Base64Data);
-
-                                            // FIX LỖI FILESTREAM: Truyền chuẩn chỉ theo C# FileStream(path, mode, access, share)
-                                            using (FileStream fs = new FileStream(localPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None))
+                                            var chunk = JsonSerializer.Deserialize<FileChunkPacket>(packet.Data);
+                                            if (chunk != null)
                                             {
-                                                fs.Seek(chunk.Offset, SeekOrigin.Begin);
-                                                fs.Write(realBytes, 0, realBytes.Length);
-                                            }
+                                                string localPath = await SQLiteHelper.GetLocalPathByDownloadIdAsync(chunk.DownloadID);
+                                                if (string.IsNullOrEmpty(localPath)) return;
 
-                                            long currentDownloaded = chunk.Offset + realBytes.Length;
-                                            string status = chunk.IsLastChunk ? "Completed" : "Downloading";
+                                                // Giải mã nhị phân nặng từ chuỗi Base64
+                                                byte[] realBytes = Convert.FromBase64String(chunk.Base64Data);
 
-                                            await SQLiteHelper.UpdateDownloadProgressAsync(chunk.DownloadID, currentDownloaded, status);
-
-                                            double percentage = chunk.TotalBytes > 0 ? ((double)currentDownloaded / chunk.TotalBytes) * 100 : 0;
-
-                                            this.Invoke(new Action(() =>
-                                            {
-                                                if (chunk.IsLastChunk)
+                                                // Mở luồng ghi ổ cứng độc lập
+                                                using (FileStream fs = new FileStream(localPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite))
                                                 {
-                                                    MessageBox.Show($"Tải file thành công viên mãn:\n{Path.GetFileName(localPath)}", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                                                    fs.Seek(chunk.Offset, SeekOrigin.Begin);
+                                                    fs.Write(realBytes, 0, realBytes.Length);
                                                 }
-                                            }));
+
+                                                long currentDownloaded = chunk.Offset + realBytes.Length;
+                                                string status = chunk.IsLastChunk ? "Completed" : "Downloading";
+
+                                                // Cập nhật DB ngầm không làm nghẽn Socket
+                                                await SQLiteHelper.UpdateDownloadProgressAsync(chunk.DownloadID, currentDownloaded, status);
+
+                                                // Kiểm soát tần suất vẽ giao diện (Chặn UI nghẽn mạch)
+                                                if (chunk.IsLastChunk || (DateTime.Now - _lastUiUpdate).TotalMilliseconds > 150)
+                                                {
+                                                    _lastUiUpdate = DateTime.Now;
+
+                                                    double percentage = chunk.TotalBytes > 0 ? ((double)currentDownloaded / chunk.TotalBytes) * 100 : 0;
+
+                                                    this.BeginInvoke(new Action(() =>
+                                                    {
+                                                        // Cập nhật nhãn trạng thái của fen tại đây
+                                                        // Ví dụ: tsStatusLabel.Text = $"Đang tải: {percentage:F1}%";
+
+                                                        if (chunk.IsLastChunk)
+                                                        {
+                                                            MessageBox.Show($"Tải file thành công viên mãn:\n{Path.GetFileName(localPath)}", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                                                        }
+                                                    }));
+                                                }
+                                            }
                                         }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        // Do hàm LogAsync bị lỗi (xem Cụm 2), tạm thời cất lỗi vào Console hoặc xử lý sau
-                                        Console.WriteLine($"Lỗi ghi file băm nhỏ: {ex.Message}");
-                                    }
+                                        catch (Exception ex)
+                                        {
+                                            Console.WriteLine($"Lỗi xử lý luồng ghi file độc lập: {ex.Message}");
+                                        }
+                                    });
                                 }
                             }
                         }
@@ -823,8 +834,7 @@ namespace AgentControl
 
         private async void btnCopy_Click(object sender, EventArgs e)
         {
-            // 1. Kiểm tra xem người dùng đã chọn Agent và chọn File cần tải chưa
-            // Giả sử fen đang lưu ID của Agent được chọn vào biến selectedAgentId lúc click ListBoxAgents
+            // 1. Kiểm tra xem người dùng đã chọn Agent chưa
             if (string.IsNullOrEmpty(selectedAgentId))
             {
                 MessageBox.Show("Vui lòng chọn một Agent trước!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -838,10 +848,7 @@ namespace AgentControl
                 return;
             }
 
-            // Bốc phần tử đầu tiên trong danh sách các file được tích chọn
-            ListViewItem selectedItem = lvRemoteFiles.CheckedItems[0];
-
-            // Lấy đường dẫn thư mục cha hiện tại đang mở ở Vùng 2 (tvRemoteFolders)
+            // Lấy đường dẫn thư mục cha hiện tại đang mở trên TreeView
             if (tvRemoteFolders.SelectedNode == null || tvRemoteFolders.SelectedNode.Tag == null)
             {
                 MessageBox.Show("Không xác định được thư mục hiện tại của Agent!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -849,78 +856,82 @@ namespace AgentControl
             }
             string currentFolderPath = tvRemoteFolders.SelectedNode.Tag.ToString();
 
-            // Kết hợp thư mục hiện tại với tên file để ra đường dẫn tuyệt đối chính xác trên máy Agent
-            string fileName = selectedItem.Text;
-            string remoteFilePath = Path.Combine(currentFolderPath, fileName);
-
-            // Kiểm tra xem có phải là Folder không (Nếu cơ chế phân biệt folder của fen dựa trên Icon hoặc SubItem)
-            // Tạm thời xử lý luồng tải File trước cho chuẩn bài băm nhỏ byte
-            if (selectedItem.SubItems.Count > 1 && selectedItem.SubItems[1].Text == "Folder")
+            // 2. Thay vì SaveFileDialog (bị bật popup liên tục), ta dùng FolderBrowserDialog để chọn một thư mục lưu chung cho tất cả file
+            using (FolderBrowserDialog fbd = new FolderBrowserDialog())
             {
-                MessageBox.Show("Tính năng tải nguyên Thư mục đang được tối ưu, vui lòng chọn File!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
+                fbd.Description = "Chọn thư mục trên Server để lưu tất cả các file tải về:";
+                if (fbd.ShowDialog() != DialogResult.OK) return;
 
-            // 2. Cho người dùng chọn nơi lưu file trên Server bằng SaveFileDialog
-            using (SaveFileDialog sfd = new SaveFileDialog())
-            {
-                sfd.FileName = fileName;
-                if (sfd.ShowDialog() != DialogResult.OK) return;
+                string localTargetFolder = fbd.SelectedPath;
 
-                string localFilePath = sfd.FileName;
-
-                // 3. Khởi tạo một phiên tải xuống độc lập (Bất tử luồng bằng GUID)
-                string downloadId = Guid.NewGuid().ToString();
-
-                // 4. Đưa vào SQLite dưới trạng thái 'Waiting'
-                // Mẹo: Vì lúc này chưa biết chính xác dung lượng thật từ Agent, ta tạm để 0, Agent sẽ phản hồi kèm TotalBytes sau.
-                await SQLiteHelper.AddToDownloadQueueAsync(downloadId, selectedAgentId, remoteFilePath, localFilePath, 0);
-                await SQLiteHelper.SaveLogAsync("Download", $"Bắt đầu tạo phiên tải file: {fileName} | ID: {downloadId}");
-
-                // 5. Đóng gói tin ra lệnh gửi xuống Agent đề nghị "Mở luồng đọc file"
-                // Gửi kèm vị trí Offset = 0 (Tải mới) hoặc nếu là Resume thì quét DB xem đã có bao nhiêu byte trước đó
-                long offset = await SQLiteHelper.GetDownloadedBytesOffsetAsync(downloadId);
-
-                var downloadRequest = new
+                // 🌟 VÒNG LẶP DUYỆT QUA TẤT CẢ CÁC FILE ĐƯỢC TÍCH CHỌN Ô VUÔNG
+                foreach (ListViewItem selectedItem in lvRemoteFiles.CheckedItems)
                 {
-                    DownloadID = downloadId,
-                    RemotePath = remoteFilePath,
-                    Offset = offset
-                };
+                    string fileName = selectedItem.Text;
+                    string remoteFilePath = Path.Combine(currentFolderPath, fileName);
+                    string localFilePath = Path.Combine(localTargetFolder, fileName); // Tự động tạo đường dẫn đích trên Server
 
-                SocketPacket requestPacket = new SocketPacket
-                {
-                    Type = "REQUEST_DOWNLOAD",
-                    AgentID = selectedAgentId,
-                    Data = JsonSerializer.Serialize(downloadRequest)
-                };
-
-                // 6. Bắn gói tin lệnh qua luồng Socket điều khiển
-                if (_connectedAgents != null && _connectedAgents.TryGetValue(selectedAgentId, out var agentInfo))
-                {
-                    TcpClient client = agentInfo.Client;
-                    if (client != null && client.Connected)
+                    // Bỏ qua nếu dòng này là Folder (Tạm thời ưu tiên băm nhỏ tải file trước)
+                    if (selectedItem.SubItems.Count > 1 && selectedItem.SubItems[1].Text == "Folder")
                     {
-                        try
-                        {
-                            var stream = client.GetStream();
-                            string jsonString = JsonSerializer.Serialize(requestPacket);
-                            byte[] dataBuffer = Encoding.UTF8.GetBytes(jsonString);
-                            byte[] lengthPrefix = BitConverter.GetBytes(dataBuffer.Length);
+                        continue;
+                    }
 
-                            await stream.WriteAsync(lengthPrefix, 0, lengthPrefix.Length);
-                            await stream.WriteAsync(dataBuffer, 0, dataBuffer.Length);
-                            await stream.FlushAsync();
+                    // 3. Khởi tạo một phiên tải xuống độc lập dạng GUID cho từng file
+                    string downloadId = Guid.NewGuid().ToString();
 
-                            MessageBox.Show("Đã gửi yêu cầu tải file xuống Hàng đợi của Agent!", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        }
-                        catch (Exception ex)
+                    // 4. Đưa vào SQLite dưới trạng thái 'Waiting'
+                    await SQLiteHelper.AddToDownloadQueueAsync(downloadId, selectedAgentId, remoteFilePath, localFilePath, 0);
+                    await SQLiteHelper.SaveLogAsync("Download", $"Bắt đầu tạo phiên tải file: {fileName} | ID: {downloadId}");
+
+                    // Nếu fen sử dụng biến cache RAM tạm ở đầu class thì nạp vào đây luôn:
+                    // _downloadCachePaths[downloadId] = localFilePath;
+
+                    // 5. Đóng gói tin lệnh yêu cầu tải từng file
+                    long offset = await SQLiteHelper.GetDownloadedBytesOffsetAsync(downloadId);
+
+                    var downloadRequest = new
+                    {
+                        DownloadID = downloadId,
+                        RemotePath = remoteFilePath,
+                        Offset = offset
+                    };
+
+                    SocketPacket requestPacket = new SocketPacket
+                    {
+                        Type = "REQUEST_DOWNLOAD",
+                        AgentID = selectedAgentId,
+                        Data = JsonSerializer.Serialize(downloadRequest)
+                    };
+
+                    // 6. Bắn gói tin lệnh qua luồng Socket điều khiển xuống Agent
+                    if (_connectedAgents != null && _connectedAgents.TryGetValue(selectedAgentId, out var agentInfo))
+                    {
+                        TcpClient client = agentInfo.Client;
+                        if (client != null && client.Connected)
                         {
-                            await SQLiteHelper.SaveLogAsync("Error", $"Lỗi bắn gói tin tải file: {ex.Message}");
-                            await SQLiteHelper.UpdateDownloadProgressAsync(downloadId, offset, "Error");
+                            try
+                            {
+                                var stream = client.GetStream();
+                                string jsonString = JsonSerializer.Serialize(requestPacket);
+                                byte[] dataBuffer = Encoding.UTF8.GetBytes(jsonString);
+                                byte[] lengthPrefix = BitConverter.GetBytes(dataBuffer.Length);
+
+                                await stream.WriteAsync(lengthPrefix, 0, lengthPrefix.Length);
+                                await stream.WriteAsync(dataBuffer, 0, dataBuffer.Length);
+                                await stream.FlushAsync();
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"Lỗi bắn gói tin tải file {fileName}: {ex.Message}");
+                                await SQLiteHelper.UpdateDownloadProgressAsync(downloadId, offset, "Error");
+                            }
                         }
                     }
                 }
+
+                // Bắn thông báo gom sau khi kết thúc vòng lặp nạp lệnh ngầm thành công
+                MessageBox.Show($"Đã thêm thành công {lvRemoteFiles.CheckedItems.Count} file vào Hàng đợi tải xuống ngầm!", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
     }

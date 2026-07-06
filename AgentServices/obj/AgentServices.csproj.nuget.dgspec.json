@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentServices\\AgentServices.csproj": {}
+    "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentServices\\AgentServices.csproj": {}
   },
   "projects": {
-    "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentServices\\AgentServices.csproj": {
+    "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentServices\\AgentServices.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentServices\\AgentServices.csproj",
+        "projectUniqueName": "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentServices\\AgentServices.csproj",
         "projectName": "AgentServices",
-        "projectPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentServices\\AgentServices.csproj",
+        "projectPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentServices\\AgentServices.csproj",
         "packagesPath": "C:\\Users\\DoThai\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentServices\\obj\\",
+        "outputPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentServices\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\DoThai\\AppData\\Roaming\\NuGet\\NuGet.Config",
@@ -28,11 +28,11 @@
           "net8.0-windows7.0": {
             "targetAlias": "net8.0-windows",
             "projectReferences": {
-              "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentShared\\AgentShared.csproj": {
-                "projectPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentShared\\AgentShared.csproj"
+              "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentShared\\AgentShared.csproj": {
+                "projectPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentShared\\AgentShared.csproj"
               },
-              "C:\\Users\\DoThai\\Desktop\\repoC#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj": {
-                "projectPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj"
+              "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj": {
+                "projectPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj"
               }
             }
           }
@@ -78,14 +78,14 @@
         }
       }
     },
-    "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentShared\\AgentShared.csproj": {
+    "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentShared\\AgentShared.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentShared\\AgentShared.csproj",
+        "projectUniqueName": "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentShared\\AgentShared.csproj",
         "projectName": "AgentShared",
-        "projectPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentShared\\AgentShared.csproj",
+        "projectPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentShared\\AgentShared.csproj",
         "packagesPath": "C:\\Users\\DoThai\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentShared\\obj\\",
+        "outputPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentShared\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\DoThai\\AppData\\Roaming\\NuGet\\NuGet.Config",
@@ -164,14 +164,14 @@
         }
       }
     },
-    "C:\\Users\\DoThai\\Desktop\\repoC#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj": {
+    "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\DoThai\\Desktop\\repoC#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj",
+        "projectUniqueName": "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj",
         "projectName": "NHFUiControls",
-        "projectPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj",
+        "projectPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj",
         "packagesPath": "C:\\Users\\DoThai\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\NHFUiControls\\NHFUiControls\\obj\\",
+        "outputPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\DoThai\\AppData\\Roaming\\NuGet\\NuGet.Config",

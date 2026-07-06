@@ -13,11 +13,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\DoThai\\Desktop\\repoC#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj",
+      "projectUniqueName": "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj",
       "projectName": "NHFUiControls",
-      "projectPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj",
+      "projectPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj",
       "packagesPath": "C:\\Users\\DoThai\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\NHFUiControls\\NHFUiControls\\obj\\",
+      "outputPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\DoThai\\AppData\\Roaming\\NuGet\\NuGet.Config",
