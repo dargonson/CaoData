@@ -56,6 +56,10 @@
             "Microsoft.Extensions.Hosting": {
               "target": "Package",
               "version": "[11.0.0-preview.5.26302.115, )"
+            },
+            "Newtonsoft.Json": {
+              "target": "Package",
+              "version": "[13.0.4, )"
             }
           },
           "imports": [
@@ -127,6 +131,10 @@
             "Microsoft.Extensions.Hosting.WindowsServices": {
               "target": "Package",
               "version": "[11.0.0-preview.5.26302.115, )"
+            },
+            "Newtonsoft.Json": {
+              "target": "Package",
+              "version": "[13.0.4, )"
             },
             "SQLitePCLRaw.bundle_e_sqlite3": {
               "target": "Package",
@@ -205,6 +213,12 @@
       "frameworks": {
         "net8.0-windows7.0": {
           "targetAlias": "net8.0-windows",
+          "dependencies": {
+            "Newtonsoft.Json": {
+              "target": "Package",
+              "version": "[13.0.4, )"
+            }
+          },
           "imports": [
             "net461",
             "net462",

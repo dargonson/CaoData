@@ -1,8 +1,10 @@
 {
   "version": 2,
-  "dgSpecHash": "sHNT7Dpyrys=",
+  "dgSpecHash": "dTlBQ9DCZjA=",
   "success": true,
   "projectFilePath": "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj",
-  "expectedPackageFiles": [],
+  "expectedPackageFiles": [
+    "C:\\Users\\DoThai\\.nuget\\packages\\newtonsoft.json\\13.0.4\\newtonsoft.json.13.0.4.nupkg.sha512"
+  ],
   "logs": []
 }

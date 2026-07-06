@@ -1,10 +1,12 @@
 ﻿
 using AgentShared; // ⬅️ Thêm mới    
+using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using System.Net; // ⬅️ Thêm mới
 using System.Net.Sockets; // ⬅️ Thêm mới
 using System.Text; // ⬅️ Thêm mới
 using System.Text.Json; // ⬅️ Thêm mới
+//using Newtonsoft.Json;
 
 
 namespace AgentControl
@@ -63,8 +65,42 @@ namespace AgentControl
 
             return index;
         }
+        private void InitDownloadGrid()
+        {
+            dgvDownloads.Columns.Clear();
+            dgvDownloads.AutoGenerateColumns = false;
+            dgvDownloads.AllowUserToAddRows = false;
+            dgvDownloads.ReadOnly = true;
+            dgvDownloads.RowHeadersVisible = false; // Ẩn cột đầu thừa thãi cho gọn
+            dgvDownloads.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+
+            // 1. Cột Mã Tải (Ẩn ngầm làm mồi tương tác)
+            dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "DownloadID", HeaderText = "Mã Tải", Visible = false }); // [cite: 7]
+
+            // 2. Cột Tên Tập Tin
+            dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "FileName", HeaderText = "Tên Tập Tin", Width = 200, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill }); // [cite: 8]
+
+            // 3. Cột Dung Lượng
+            dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "TotalSize", HeaderText = "Dung Lượng", Width = 100 }); // [cite: 9]
+
+            // 4. Cột Tiến Độ (Sử dụng con hàng Custom ProgressBar vừa tạo ở Bước 1)
+            var progressCol = new DataGridViewProgressBarColumn();
+            progressCol.Name = "Progress";
+            progressCol.HeaderText = "Tiến Độ";
+            progressCol.Width = 150;
+            dgvDownloads.Columns.Add(progressCol); // [cite: 10]
+
+            // 5. Cột Tốc Độ
+            dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "Speed", HeaderText = "Tốc Độ", Width = 100 }); // [cite: 11]
+
+            // 6. Cột Trạng Thái
+            dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Trạng Thái", Width = 120 }); // [cite: 13, 14]
+        }
         private async void Form1_Load(object sender, EventArgs e)
         {
+            InitDownloadGrid();
+ // Kích hoạt Timer bắt đầu đập chu kỳ 500ms một lần để quét DB lên UI
+            tmrUpdateUI.Start();
             //ListboxAgents.AddAgent("PC-NHF-01", "Administrator", "192.168.1.15", "Windows 11", "adsadsads", true);
             ListboxAgents.ItemHeight = 123;
             shellImages.ImageSize = new Size(16, 16);
@@ -82,7 +118,18 @@ namespace AgentControl
             // Kích hoạt luồng chạy ngầm quét Tim mạch (Heartbeat) chu kỳ 5 giây/lần
             _ = StartServerHeartbeatMonitorAsync();
         }
-
+        private string FormatSize(long bytes)
+        {
+            string[] suffixes = { "B", "KB", "MB", "GB", "TB" };
+            int counter = 0;
+            decimal number = bytes;
+            while (Math.Round(number / 1024) >= 1)
+            {
+                number /= 1024;
+                counter++;
+            }
+            return string.Format("{0:n2} {1}", number, suffixes[counter]);
+        }
         private async void btnKetNoi_Click(object sender, EventArgs e)
         {
             if (!_isListening)
@@ -211,12 +258,52 @@ namespace AgentControl
                             }
                             else if (packet.Type == "REGISTER")
                             {
-                                var info = JsonSerializer.Deserialize<AgentInfo>(packet.Data);
+                                var info = System.Text.Json.JsonSerializer.Deserialize<AgentInfo>(packet.Data);
                                 if (info != null)
                                 {
                                     await SQLiteHelper.SaveOrUpdateAgentAsync(packet.AgentID, info, true);
+                                    // [ĐÃ CÓ SẴN] Lưu hoặc cập nhật thông tin Agent vào danh sách quản lý
+                                    // [ĐÃ CÓ SẴN CỦA FEN] Lưu thông tin kết nối
                                     _connectedAgents[packet.AgentID] = (client, DateTime.Now);
 
+                                    // 🚀 Tự động quét hàng đợi để Resume khi reconnect (Tách luồng an toàn)
+                                    _ = Task.Run(async () =>
+                                    {
+                                        try
+                                        {
+                                            // 1. Quét DB lấy danh sách dở dang
+                                            var pendingDownloads = await SQLiteHelper.GetPendingDownloadsByAgentAsync(packet.AgentID);
+
+                                            foreach (var job in pendingDownloads)
+                                            {
+                                                // 2. Sử dụng chuẩn DownloadedBytes cho DownloadJobDto của fen
+                                                var resumeModel = new DownloadRequestModel
+                                                {
+                                                    DownloadID = job.DownloadID,
+                                                    RemotePath = job.RemotePath,
+                                                    Offset = job.DownloadedBytes // Sửa thành DownloadedBytes là hết gạch đỏ!
+                                                };
+
+                                                var responsePacket = new SocketPacket
+                                                {
+                                                    Type = "REQUEST_DOWNLOAD",
+                                                    AgentID = packet.AgentID,
+                                                    Data = Newtonsoft.Json.JsonConvert.SerializeObject(resumeModel) // Dùng full namespace, chấp hết thiếu 'using'
+                                                };
+
+                                                string jsonPayload = Newtonsoft.Json.JsonConvert.SerializeObject(responsePacket);
+
+                                                // 3. Tận dụng trực tiếp việc ghi Stream của client truyền vào, không gọi hàm ngoài
+                                                byte[] buffer = System.Text.Encoding.UTF8.GetBytes(jsonPayload + "<EOF>");
+                                                var stream = client.GetStream();
+                                                await stream.WriteAsync(buffer, 0, buffer.Length);
+
+                                                // 4. Cập nhật trạng thái
+                                                await SQLiteHelper.UpdateDownloadProgressAsync(job.DownloadID, job.DownloadedBytes, "Downloading");
+                                            }
+                                        }
+                                        catch { /* Cô lập luồng chạy ngầm để không sập Tool */ }
+                                    });
                                     this.Invoke(new Action(async () =>
                                     {
                                         await LoadAllAgentsFromDbAsync();
@@ -563,7 +650,7 @@ namespace AgentControl
                 lvRemoteFiles.Items.Add(new ListViewItem("[Lỗi hệ thống: " + ex.Message + "]"));
             }
         }
-        private string FormatSize(long bytes)
+        private string convertFormatSize(long bytes)
         {
             string[] suffix = { "B", "KB", "MB", "GB", "TB" };
             int i;
@@ -926,6 +1013,45 @@ namespace AgentControl
                                 Console.WriteLine($"Lỗi bắn gói tin tải file {fileName}: {ex.Message}");
                                 await SQLiteHelper.UpdateDownloadProgressAsync(downloadId, offset, "Error");
                             }
+                            finally
+                            {
+                                try
+                                {
+                                    // 1. Quét danh sách kết nối để tìm xem client nào vừa đứt mạch và lấy ra ID của nó
+                                    string disconnectedAgentId = "";
+                                    foreach (var pair in _connectedAgents)
+                                    {
+                                        if (pair.Value.Client == client)
+                                        {
+                                            disconnectedAgentId = pair.Key;
+                                            break;
+                                        }
+                                    }
+
+                                    if (!string.IsNullOrEmpty(disconnectedAgentId))
+                                    {
+                                        _connectedAgents.TryRemove(disconnectedAgentId, out _);
+
+                                        // 🔥 Tận dụng hàm UpdateDownloadProgressAsync đã viết sẵn trong SQLiteHelper của fen
+                                        // Khi mất mạng, ta quét hàng đợi và đóng băng trạng thái sang 'Waiting Agent' thông qua SQLiteHelper
+                                        _ = Task.Run(async () =>
+                                        {
+                                            try
+                                            {
+                                                // Lấy danh sách các job đang tải của Agent này để cập nhật trạng thái
+                                                var pendingDownloads = await SQLiteHelper.GetPendingDownloadsByAgentAsync(disconnectedAgentId);
+                                                foreach (var job in pendingDownloads)
+                                                {
+                                                    // Giữ nguyên số byte đã tải (job.DownloadedBytes), chỉ đổi trạng thái sang 'Waiting Agent'
+                                                    await SQLiteHelper.UpdateDownloadProgressAsync(job.DownloadID, job.DownloadedBytes, "Waiting Agent");
+                                                }
+                                            }
+                                            catch { /* Cô lập luồng chạy ngầm để không đơ tool */ }
+                                        });
+                                    }
+                                }
+                                catch { /* Cô lập lỗi */ }
+                            }
                         }
                     }
                 }
@@ -933,6 +1059,88 @@ namespace AgentControl
                 // Bắn thông báo gom sau khi kết thúc vòng lặp nạp lệnh ngầm thành công
                 MessageBox.Show($"Đã thêm thành công {lvRemoteFiles.CheckedItems.Count} file vào Hàng đợi tải xuống ngầm!", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
+        }
+
+        private async void tmrUpdateUI_Tick(object sender, EventArgs e)
+        {
+            try
+            {
+                // 1. Gọi SQLite lấy toàn bộ danh sách hàng đợi hiện tại
+                var downloadList = await SQLiteHelper.GetAllDownloadsAsync();
+
+                // 2. Duyệt qua từng bản ghi để cập nhật hoặc thêm mới vào DataGridView
+                foreach (var job in downloadList)
+                {
+                    DataGridViewRow existingRow = null;
+
+                    // Kiểm tra xem dòng này đã tồn tại trên GridView chưa bằng DownloadID
+                    foreach (DataGridViewRow row in dgvDownloads.Rows)
+                    {
+                        if (row.Cells["DownloadID"].Value?.ToString() == job.DownloadID)
+                        {
+                            existingRow = row;
+                            break;
+                        }
+                    }
+
+                    // Tính toán phần trăm tiến độ (%) dựa trên số byte đã nạp
+                    int progressPercent = 0;
+                    if (job.TotalBytes > 0)
+                    {
+                        progressPercent = (int)((job.DownloadedBytes * 100) / job.TotalBytes);
+                        if (progressPercent > 100) progressPercent = 100;
+                    }
+
+                    // Bốc tách lấy tên file gọn gàng từ đường dẫn từ xa (RemotePath)
+                    string fileName = System.IO.Path.GetFileName(job.RemotePath);
+
+                    // 🔥 ĐÃ ĐỔI TÊN HÀM TẠI ĐÂY: Sử dụng convertFormatSize chuẩn chỉ
+                    string totalSizeStr = convertFormatSize(job.TotalBytes);
+
+                    // Tạm thời hiển thị trạng thái tốc độ
+                    string speedStr = job.Status == "Downloading" ? "Calculating..." : "0 B/s";
+
+                    if (existingRow != null)
+                    {
+                        // 🔄 Nếu dòng đã có sẵn: Chỉ cập nhật các giá trị số đang nhảy để tránh giật lag UI
+                        existingRow.Cells["Progress"].Value = progressPercent;
+                        existingRow.Cells["Status"].Value = job.Status;
+
+                        if (job.Status == "Downloading")
+                        {
+                            existingRow.Cells["Speed"].Value = "-- MB/s";
+                        }
+                        else
+                        {
+                            existingRow.Cells["Speed"].Value = "0 B/s";
+                        }
+                    }
+                    else
+                    {
+                        // ➕ Nếu là file mới được thêm vào hàng đợi: Tạo dòng mới tinh
+                        int rowIndex = dgvDownloads.Rows.Add();
+                        DataGridViewRow newRow = dgvDownloads.Rows[rowIndex];
+
+                        newRow.Cells["DownloadID"].Value = job.DownloadID;
+                        newRow.Cells["FileName"].Value = fileName;
+                        newRow.Cells["TotalSize"].Value = totalSizeStr;
+                        newRow.Cells["Progress"].Value = progressPercent;
+                        newRow.Cells["Speed"].Value = speedStr;
+                        newRow.Cells["Status"].Value = job.Status;
+                    }
+                }
+
+                // 3. Dọn rác: Nếu file đã bị xóa trong DB thì xóa luôn dòng đó trên UI
+                for (int i = dgvDownloads.Rows.Count - 1; i >= 0; i--)
+                {
+                    string gridId = dgvDownloads.Rows[i].Cells["DownloadID"].Value?.ToString();
+                    if (!downloadList.Exists(x => x.DownloadID == gridId))
+                    {
+                        dgvDownloads.Rows.RemoveAt(i);
+                    }
+                }
+            }
+            catch { /* Cách ly lỗi luồng giao diện */ }
         }
     }
 }

@@ -408,6 +408,14 @@
           }
         }
       },
+      "Newtonsoft.Json/13.0.4": {
+        "runtime": {
+          "lib/net6.0/Newtonsoft.Json.dll": {
+            "assemblyVersion": "13.0.0.0",
+            "fileVersion": "13.0.4.30916"
+          }
+        }
+      },
       "SourceGear.sqlite3/3.50.4.5": {
         "runtimeTargets": {
           "runtimes/android-arm/native/libe_sqlite3.so": {
@@ -949,6 +957,13 @@
       "sha512": "sha512-QXjrkVXpRDX2N2gPhwSgCx6vUaDO6rFMELtulZ+ppeFu1y7fdb7Hhh3lzdo9AKxk/0z8kYESCDyCp+pa75D75g==",
       "path": "microsoft.extensions.primitives/11.0.0-preview.5.26302.115",
       "hashPath": "microsoft.extensions.primitives.11.0.0-preview.5.26302.115.nupkg.sha512"
+    },
+    "Newtonsoft.Json/13.0.4": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-pdgNNMai3zv51W5aq268sujXUyx7SNdE2bj1wZcWjAQrKMFZV260lbqYop1d2GM67JI1huLRwxo9ZqnfF/lC6A==",
+      "path": "newtonsoft.json/13.0.4",
+      "hashPath": "newtonsoft.json.13.0.4.nupkg.sha512"
     },
     "SourceGear.sqlite3/3.50.4.5": {
       "type": "package",

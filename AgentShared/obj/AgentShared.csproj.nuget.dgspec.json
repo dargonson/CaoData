@@ -54,6 +54,10 @@
               "target": "Package",
               "version": "[11.0.0-preview.5.26302.115, )"
             },
+            "Newtonsoft.Json": {
+              "target": "Package",
+              "version": "[13.0.4, )"
+            },
             "SQLitePCLRaw.bundle_e_sqlite3": {
               "target": "Package",
               "version": "[3.0.3, )"

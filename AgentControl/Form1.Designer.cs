@@ -28,6 +28,7 @@
         /// </summary>
         private void InitializeComponent()
         {
+            components = new System.ComponentModel.Container();
             panelHeader = new Panel();
             btnKetNoi = new Button();
             btnCopy = new Button();
@@ -41,9 +42,12 @@
             ColSize = new ColumnHeader();
             ColType = new ColumnHeader();
             ColDate = new ColumnHeader();
+            dgvDownloads = new DataGridView();
+            tmrUpdateUI = new System.Windows.Forms.Timer(components);
             panelHeader.SuspendLayout();
             panelZone1.SuspendLayout();
             panelZone2.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)dgvDownloads).BeginInit();
             SuspendLayout();
             // 
             // panelHeader
@@ -55,7 +59,7 @@
             panelHeader.Location = new Point(0, 0);
             panelHeader.MaximumSize = new Size(0, 60);
             panelHeader.Name = "panelHeader";
-            panelHeader.Size = new Size(1461, 60);
+            panelHeader.Size = new Size(1870, 60);
             panelHeader.TabIndex = 0;
             // 
             // btnKetNoi
@@ -143,11 +147,10 @@
             // 
             lvRemoteFiles.CheckBoxes = true;
             lvRemoteFiles.Columns.AddRange(new ColumnHeader[] { colName, ColSize, ColType, ColDate });
-            lvRemoteFiles.Dock = DockStyle.Fill;
             lvRemoteFiles.GridLines = true;
-            lvRemoteFiles.Location = new Point(621, 60);
+            lvRemoteFiles.Location = new Point(616, 60);
             lvRemoteFiles.Name = "lvRemoteFiles";
-            lvRemoteFiles.Size = new Size(840, 601);
+            lvRemoteFiles.Size = new Size(480, 601);
             lvRemoteFiles.TabIndex = 3;
             lvRemoteFiles.UseCompatibleStateImageBehavior = false;
             lvRemoteFiles.View = View.Details;
@@ -170,11 +173,25 @@
             // 
             ColDate.Text = "Date";
             // 
+            // dgvDownloads
+            // 
+            dgvDownloads.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            dgvDownloads.Location = new Point(1102, 60);
+            dgvDownloads.Name = "dgvDownloads";
+            dgvDownloads.Size = new Size(756, 601);
+            dgvDownloads.TabIndex = 4;
+            // 
+            // tmrUpdateUI
+            // 
+            tmrUpdateUI.Interval = 500;
+            tmrUpdateUI.Tick += tmrUpdateUI_Tick;
+            // 
             // Form1
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(1461, 661);
+            ClientSize = new Size(1870, 661);
+            Controls.Add(dgvDownloads);
             Controls.Add(lvRemoteFiles);
             Controls.Add(panelZone2);
             Controls.Add(panelZone1);
@@ -185,6 +202,7 @@
             panelHeader.ResumeLayout(false);
             panelZone1.ResumeLayout(false);
             panelZone2.ResumeLayout(false);
+            ((System.ComponentModel.ISupportInitialize)dgvDownloads).EndInit();
             ResumeLayout(false);
         }
 
@@ -203,5 +221,7 @@
         private Button btnKetNoi;
         private NHFUiControls.ListBoxNHF lvAgents;
         private NHFUiControls.ListBoxNHF ListboxAgents;
+        private DataGridView dgvDownloads;
+        private System.Windows.Forms.Timer tmrUpdateUI;
     }
 }

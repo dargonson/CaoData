@@ -33,3 +33,4 @@ C:\Users\DoThai\Desktop\Repo#\NHFUiControls\NHFUiControls\obj\Debug\net8.0-windo
 C:\Users\DoThai\Desktop\Repo#\NHFUiControls\NHFUiControls\obj\Debug\net8.0-windows\refint\NHFUiControls.dll
 C:\Users\DoThai\Desktop\Repo#\NHFUiControls\NHFUiControls\obj\Debug\net8.0-windows\NHFUiControls.pdb
 C:\Users\DoThai\Desktop\Repo#\NHFUiControls\NHFUiControls\obj\Debug\net8.0-windows\ref\NHFUiControls.dll
+C:\Users\DoThai\Desktop\Repo#\NHFUiControls\NHFUiControls\obj\Debug\net8.0-windows\NHFUiControls.csproj.AssemblyReference.cache

@@ -246,6 +246,14 @@ namespace AgentControl
                 }
             }
         }
+
+
+
+
+
+
+
+
         public static async Task SaveLogAsync(string logType, string message)
         {
             using (var connection = new SQLiteConnection(ConnectionString))
@@ -265,5 +273,117 @@ namespace AgentControl
                 }
             }
         }
+        // 1. Khi Agent đứt mạch (Disconnect): Tìm các file đang tải (Downloading) hoặc Waiting của Agent đó và chuyển sang 'Waiting Agent'
+        public static async Task FailPendingDownloadsByAgentAsync(string agentId)
+        {
+            using (var connection = new SQLiteConnection(ConnectionString))
+            {
+                await connection.OpenAsync();
+
+                string updateQuery = @"
+                    UPDATE DownloadQueue 
+                    SET Status = 'Waiting Agent',
+                        UpdatedTime = @Time
+                    WHERE AgentID = @AgentID AND (Status = 'Downloading' OR Status = 'Waiting');";
+
+                using (var cmd = new SQLiteCommand(updateQuery, connection))
+                {
+                    cmd.Parameters.AddWithValue("@AgentID", agentId);
+                    cmd.Parameters.AddWithValue("@Time", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                    await cmd.ExecuteNonQueryAsync();
+                }
+            }
+        }
+
+        // 2. Khi Agent kết nối lại (REGISTER): Quét tìm các Job 'Waiting Agent' của nó để bốc Offset lên Auto-Resume
+        public static async Task<List<DownloadJobDto>> GetPendingDownloadsByAgentAsync(string agentId)
+        {
+            var pendingJobs = new List<DownloadJobDto>();
+
+            using (var connection = new SQLiteConnection(ConnectionString))
+            {
+                await connection.OpenAsync();
+
+                string selectQuery = @"
+            SELECT DownloadID, RemotePath, DownloadedBytes 
+            FROM DownloadQueue 
+            WHERE AgentID = @AgentID AND Status = 'Waiting Agent';";
+
+                using (var cmd = new SQLiteCommand(selectQuery, connection))
+                {
+                    cmd.Parameters.AddWithValue("@AgentID", agentId);
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            pendingJobs.Add(new DownloadJobDto
+                            {
+                                DownloadID = reader["DownloadID"].ToString(),
+                                RemotePath = reader["RemotePath"].ToString(),
+
+                                // 🔥 SỬA TẠI ĐÂY: Đổi từ 'Offset' thành 'DownloadedBytes' cho đúng thuộc tính của Class
+                                DownloadedBytes = Convert.ToInt64(reader["DownloadedBytes"])
+                            });
+                        }
+                    }
+                }
+            }
+            return pendingJobs;
+        }
+
+        // 3. Hàm bốc toàn bộ dữ liệu Queue nuôi con DataGridView (Cột: ID, File, Tổng size, Đã tải, Trạng thái)
+        public static async Task<System.Data.DataTable> GetDownloadQueueTableAsync()
+        {
+            var table = new System.Data.DataTable();
+            using (var connection = new SQLiteConnection(ConnectionString))
+            {
+                await connection.OpenAsync();
+                string selectQuery = "SELECT DownloadID, RemotePath, TotalBytes, DownloadedBytes, Status FROM DownloadQueue ORDER BY UpdatedTime DESC;";
+                using (var cmd = new SQLiteCommand(selectQuery, connection))
+                {
+                    using (var adapter = new SQLiteDataAdapter(cmd))
+                    {
+                        adapter.Fill(table);
+                    }
+                }
+            }
+            return table;
+        }
+
+
+        public static async Task<List<DownloadJobDto>> GetAllDownloadsAsync()
+        {
+            var list = new List<DownloadJobDto>();
+
+            using (var connection = new SQLiteConnection(ConnectionString))
+            {
+                await connection.OpenAsync();
+
+                // Lấy tất cả các file trong hàng đợi, sắp xếp theo thời gian hoặc ID
+                string sql = "SELECT DownloadID, RemotePath, LocalPath, TotalBytes, DownloadedBytes, Status FROM DownloadQueue;";
+
+                using (var cmd = new SQLiteCommand(sql, connection))
+                {
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            list.Add(new DownloadJobDto
+                            {
+                                DownloadID = reader["DownloadID"].ToString(),
+                                RemotePath = reader["RemotePath"].ToString(),
+                                LocalPath = reader["LocalPath"].ToString(),
+                                // Ép kiểu chính xác sang long cho dung lượng và tiến độ
+                                TotalBytes = reader["TotalBytes"] != DBNull.Value ? Convert.ToInt64(reader["TotalBytes"]) : 0,
+                                DownloadedBytes = reader["DownloadedBytes"] != DBNull.Value ? Convert.ToInt64(reader["DownloadedBytes"]) : 0,
+                                Status = reader["Status"].ToString()
+                            });
+                        }
+                    }
+                }
+            }
+            return list;
+        }   
+
     }
 }
