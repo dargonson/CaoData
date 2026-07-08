@@ -283,3 +283,4 @@ C:\Users\DoThai\Desktop\Repo#\AgentServices\obj\Debug\net8.0-windows\AgentServic
 C:\Users\DoThai\Desktop\Repo#\AgentServices\obj\Debug\net8.0-windows\AgentServices.genruntimeconfig.cache
 C:\Users\DoThai\Desktop\Repo#\AgentServices\obj\Debug\net8.0-windows\ref\AgentServices.dll
 C:\Users\DoThai\Desktop\Repo#\AgentServices\bin\Debug\net8.0-windows\Newtonsoft.Json.dll
+C:\Users\DoThai\Desktop\repoC#\AgentServices\bin\Debug\net8.0-windows\Newtonsoft.Json.dll

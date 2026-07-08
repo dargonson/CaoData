@@ -147,10 +147,11 @@
             // 
             lvRemoteFiles.CheckBoxes = true;
             lvRemoteFiles.Columns.AddRange(new ColumnHeader[] { colName, ColSize, ColType, ColDate });
+            lvRemoteFiles.Dock = DockStyle.Left;
             lvRemoteFiles.GridLines = true;
-            lvRemoteFiles.Location = new Point(616, 60);
+            lvRemoteFiles.Location = new Point(621, 60);
             lvRemoteFiles.Name = "lvRemoteFiles";
-            lvRemoteFiles.Size = new Size(480, 601);
+            lvRemoteFiles.Size = new Size(487, 601);
             lvRemoteFiles.TabIndex = 3;
             lvRemoteFiles.UseCompatibleStateImageBehavior = false;
             lvRemoteFiles.View = View.Details;
@@ -160,6 +161,7 @@
             // colName
             // 
             colName.Text = "Name";
+            colName.Width = 250;
             // 
             // ColSize
             // 
@@ -176,7 +178,8 @@
             // dgvDownloads
             // 
             dgvDownloads.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
-            dgvDownloads.Location = new Point(1102, 60);
+            dgvDownloads.Dock = DockStyle.Right;
+            dgvDownloads.Location = new Point(1114, 60);
             dgvDownloads.Name = "dgvDownloads";
             dgvDownloads.Size = new Size(756, 601);
             dgvDownloads.TabIndex = 4;

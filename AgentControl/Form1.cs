@@ -14,7 +14,7 @@ namespace AgentControl
     public partial class Form1 : Form
     {
 
-        // --- BIẾN KHỞI TẠO SOCKET SERVER --- [cite: 989]
+        // --- BIẾN KHỞI TẠO SOCKET SERVER --- 
         private TcpListener _serverListener;
         private bool _isListening = false;
         // Quản lý danh sách kết nối: key là AgentID, Value gồm TcpClient và thời gian LastSeen
