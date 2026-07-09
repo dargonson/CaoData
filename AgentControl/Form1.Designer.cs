@@ -44,6 +44,7 @@
             ColDate = new ColumnHeader();
             dgvDownloads = new DataGridView();
             tmrUpdateUI = new System.Windows.Forms.Timer(components);
+            btncleardrv = new Button();
             panelHeader.SuspendLayout();
             panelZone1.SuspendLayout();
             panelZone2.SuspendLayout();
@@ -52,6 +53,7 @@
             // 
             // panelHeader
             // 
+            panelHeader.Controls.Add(btncleardrv);
             panelHeader.Controls.Add(btnKetNoi);
             panelHeader.Controls.Add(btnCopy);
             panelHeader.Controls.Add(brndel);
@@ -147,10 +149,11 @@
             // 
             lvRemoteFiles.CheckBoxes = true;
             lvRemoteFiles.Columns.AddRange(new ColumnHeader[] { colName, ColSize, ColType, ColDate });
+            lvRemoteFiles.Dock = DockStyle.Left;
             lvRemoteFiles.GridLines = true;
-            lvRemoteFiles.Location = new Point(616, 60);
+            lvRemoteFiles.Location = new Point(621, 60);
             lvRemoteFiles.Name = "lvRemoteFiles";
-            lvRemoteFiles.Size = new Size(480, 601);
+            lvRemoteFiles.Size = new Size(487, 601);
             lvRemoteFiles.TabIndex = 3;
             lvRemoteFiles.UseCompatibleStateImageBehavior = false;
             lvRemoteFiles.View = View.Details;
@@ -160,6 +163,7 @@
             // colName
             // 
             colName.Text = "Name";
+            colName.Width = 250;
             // 
             // ColSize
             // 
@@ -176,15 +180,26 @@
             // dgvDownloads
             // 
             dgvDownloads.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
-            dgvDownloads.Location = new Point(1102, 60);
+            dgvDownloads.Dock = DockStyle.Right;
+            dgvDownloads.Location = new Point(1114, 60);
             dgvDownloads.Name = "dgvDownloads";
             dgvDownloads.Size = new Size(756, 601);
             dgvDownloads.TabIndex = 4;
             // 
             // tmrUpdateUI
             // 
-            tmrUpdateUI.Interval = 500;
+            tmrUpdateUI.Interval = 1000;
             tmrUpdateUI.Tick += tmrUpdateUI_Tick;
+            // 
+            // btncleardrv
+            // 
+            btncleardrv.Location = new Point(1434, 12);
+            btncleardrv.Name = "btncleardrv";
+            btncleardrv.Size = new Size(112, 42);
+            btncleardrv.TabIndex = 3;
+            btncleardrv.Text = "Clear";
+            btncleardrv.UseVisualStyleBackColor = true;
+            btncleardrv.Click += btncleardrv_Click;
             // 
             // Form1
             // 
@@ -223,5 +238,6 @@
         private NHFUiControls.ListBoxNHF ListboxAgents;
         private DataGridView dgvDownloads;
         private System.Windows.Forms.Timer tmrUpdateUI;
+        private Button btncleardrv;
     }
 }

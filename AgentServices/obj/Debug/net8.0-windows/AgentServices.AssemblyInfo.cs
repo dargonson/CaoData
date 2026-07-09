@@ -11,10 +11,11 @@
 using System;
 using System.Reflection;
 
+[assembly: Microsoft.Extensions.Configuration.UserSecrets.UserSecretsIdAttribute("dotnet-AgentServices-8622842c-e71d-4acf-ad2d-2decfc66d5e8")]
 [assembly: System.Reflection.AssemblyCompanyAttribute("AgentServices")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+cd437dccc02de1e51f68c5b8fefe30ced1ba3cdc")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+9a37f7ab4cbd3305f5b95986f7dc5d6500ffd562")]
 [assembly: System.Reflection.AssemblyProductAttribute("AgentServices")]
 [assembly: System.Reflection.AssemblyTitleAttribute("AgentServices")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

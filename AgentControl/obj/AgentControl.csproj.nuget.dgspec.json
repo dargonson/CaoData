@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentControl\\AgentControl.csproj": {}
+    "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentControl\\AgentControl.csproj": {}
   },
   "projects": {
-    "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentControl\\AgentControl.csproj": {
+    "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentControl\\AgentControl.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentControl\\AgentControl.csproj",
+        "projectUniqueName": "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentControl\\AgentControl.csproj",
         "projectName": "AgentControl",
-        "projectPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentControl\\AgentControl.csproj",
+        "projectPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentControl\\AgentControl.csproj",
         "packagesPath": "C:\\Users\\DoThai\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentControl\\obj\\",
+        "outputPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentControl\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\DoThai\\AppData\\Roaming\\NuGet\\NuGet.Config",
@@ -28,11 +28,11 @@
           "net8.0-windows7.0": {
             "targetAlias": "net8.0-windows",
             "projectReferences": {
-              "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentShared\\AgentShared.csproj": {
-                "projectPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentShared\\AgentShared.csproj"
+              "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentShared\\AgentShared.csproj": {
+                "projectPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentShared\\AgentShared.csproj"
               },
-              "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj": {
-                "projectPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj"
+              "C:\\Users\\DoThai\\Desktop\\repoC#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj": {
+                "projectPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj"
               }
             }
           }
@@ -53,18 +53,6 @@
         "net8.0-windows7.0": {
           "targetAlias": "net8.0-windows",
           "dependencies": {
-            "Microsoft.Extensions.Configuration.Json": {
-              "target": "Package",
-              "version": "[11.0.0-preview.5.26302.115, )"
-            },
-            "Microsoft.Extensions.Hosting.WindowsServices": {
-              "target": "Package",
-              "version": "[11.0.0-preview.5.26302.115, )"
-            },
-            "Newtonsoft.Json": {
-              "target": "Package",
-              "version": "[13.0.4, )"
-            },
             "SQLitePCLRaw.bundle_e_sqlite3": {
               "target": "Package",
               "version": "[3.0.3, )"
@@ -72,10 +60,6 @@
             "System.Data.SQLite": {
               "target": "Package",
               "version": "[2.0.3, )"
-            },
-            "System.Management": {
-              "target": "Package",
-              "version": "[11.0.0-preview.5.26302.115, )"
             }
           },
           "imports": [
@@ -101,29 +85,29 @@
         }
       }
     },
-    "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentShared\\AgentShared.csproj": {
+    "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentShared\\AgentShared.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentShared\\AgentShared.csproj",
+        "projectUniqueName": "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentShared\\AgentShared.csproj",
         "projectName": "AgentShared",
-        "projectPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentShared\\AgentShared.csproj",
+        "projectPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentShared\\AgentShared.csproj",
         "packagesPath": "C:\\Users\\DoThai\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\AgentShared\\obj\\",
+        "outputPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\AgentShared\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\DoThai\\AppData\\Roaming\\NuGet\\NuGet.Config",
           "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
         ],
         "originalTargetFrameworks": [
-          "net8.0-windows"
+          "net8.0"
         ],
         "sources": {
           "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
           "https://api.nuget.org/v3/index.json": {}
         },
         "frameworks": {
-          "net8.0-windows7.0": {
-            "targetAlias": "net8.0-windows",
+          "net8.0": {
+            "targetAlias": "net8.0",
             "projectReferences": {}
           }
         },
@@ -140,34 +124,8 @@
         "SdkAnalysisLevel": "9.0.300"
       },
       "frameworks": {
-        "net8.0-windows7.0": {
-          "targetAlias": "net8.0-windows",
-          "dependencies": {
-            "Microsoft.Extensions.Configuration.Json": {
-              "target": "Package",
-              "version": "[11.0.0-preview.5.26302.115, )"
-            },
-            "Microsoft.Extensions.Hosting.WindowsServices": {
-              "target": "Package",
-              "version": "[11.0.0-preview.5.26302.115, )"
-            },
-            "Newtonsoft.Json": {
-              "target": "Package",
-              "version": "[13.0.4, )"
-            },
-            "SQLitePCLRaw.bundle_e_sqlite3": {
-              "target": "Package",
-              "version": "[3.0.3, )"
-            },
-            "System.Data.SQLite": {
-              "target": "Package",
-              "version": "[2.0.3, )"
-            },
-            "System.Management": {
-              "target": "Package",
-              "version": "[11.0.0-preview.5.26302.115, )"
-            }
-          },
+        "net8.0": {
+          "targetAlias": "net8.0",
           "imports": [
             "net461",
             "net462",
@@ -182,23 +140,20 @@
           "frameworkReferences": {
             "Microsoft.NETCore.App": {
               "privateAssets": "all"
-            },
-            "Microsoft.WindowsDesktop.App.WindowsForms": {
-              "privateAssets": "none"
             }
           },
           "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.315/PortableRuntimeIdentifierGraph.json"
         }
       }
     },
-    "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj": {
+    "C:\\Users\\DoThai\\Desktop\\repoC#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj",
+        "projectUniqueName": "C:\\Users\\DoThai\\Desktop\\repoC#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj",
         "projectName": "NHFUiControls",
-        "projectPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj",
+        "projectPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\NHFUiControls\\NHFUiControls\\NHFUiControls.csproj",
         "packagesPath": "C:\\Users\\DoThai\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\DoThai\\Desktop\\Repo#\\NHFUiControls\\NHFUiControls\\obj\\",
+        "outputPath": "C:\\Users\\DoThai\\Desktop\\repoC#\\NHFUiControls\\NHFUiControls\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\DoThai\\AppData\\Roaming\\NuGet\\NuGet.Config",

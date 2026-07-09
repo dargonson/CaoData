@@ -209,7 +209,7 @@ namespace NHFUiControls
             TextRenderer.DrawText(g,
                 agent.IsOnline ? "Online" : "Offline",
                 subFont,
-                new Point(card.Right - 78, card.Bottom - 28),
+                new Point(card.Right - 78, card.Top + (card.Height / 2)),
                 agent.IsOnline
                     ? Color.FromArgb(35, 160, 70)
                     : Color.FromArgb(210, 55, 55));
