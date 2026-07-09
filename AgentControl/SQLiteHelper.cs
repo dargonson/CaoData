@@ -463,7 +463,9 @@ namespace AgentControl
                     string selectQuery = @"
             SELECT DownloadID, RemotePath, DownloadedBytes
             FROM DownloadQueue
-            WHERE AgentID = @AgentID AND Status = 'Waiting Agent';";
+            WHERE AgentID = @AgentID
+              AND Status IN ('Waiting Agent', 'Downloading', 'Waiting')
+              AND DownloadedBytes >= 0;";
 
                     using (var cmd = new SQLiteCommand(selectQuery, connection))
                     {

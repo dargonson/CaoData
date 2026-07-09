@@ -5,12 +5,11 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using AgentShared;
-using System.Management;
-using System.Windows.Forms;
 // Dùng chung định dạng gói tin với Server
 
 namespace AgentService
@@ -43,7 +42,7 @@ namespace AgentService
         private AgentInfo CollectSystemInfo()
         {
             string machineName = Environment.MachineName;
-            string username = Environment.UserName;
+            string username = GetLoggedOnUsername();
             string osVersion = "Windows Unknown";
             var os = Environment.OSVersion;
 
@@ -74,52 +73,7 @@ namespace AgentService
                 }
             }
 
-            // 1. Cào thông tin phần cứng vật lý cứng (Mainboard & CPU) để tạo ID bất tử
-            string hardwareRawData = "";
-            try
-            {
-                // Lấy mã Serial của Bo mạch chủ (Mainboard)
-                using (ManagementObjectSearcher mos = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BaseBoard"))
-                {
-                    foreach (ManagementObject mo in mos.Get())
-                    {
-                        hardwareRawData += mo["SerialNumber"]?.ToString() ?? "";
-                    }
-                }
-
-                // Lấy mã ID của Chip xử lý (CPU ID)
-                using (ManagementObjectSearcher mos = new ManagementObjectSearcher("SELECT ProcessorId FROM Win3er_Processor"))
-                {
-                    foreach (ManagementObject mo in mos.Get())
-                    {
-                        hardwareRawData += mo["ProcessorId"]?.ToString() ?? "";
-                    }
-                }
-            }
-            catch
-            {
-                // Phòng hờ nếu phân quyền máy lỗi không đọc được WMI, lấy tạm thông tin MacAddress làm phương án dự phòng
-                hardwareRawData = machineName;
-            }
-
-            // Nếu chuỗi cào được quá ngắn hoặc trống, đắp thêm chuỗi dự phòng chống lỗi
-            if (string.IsNullOrWhiteSpace(hardwareRawData) || hardwareRawData.Length < 5)
-            {
-                hardwareRawData += "NHF-AGENT-DEFAULT-HARDWARE-STRING";
-            }
-
-            // 2. Mã hóa MD5 chuỗi phần cứng để tạo ra một chuỗi Hex cố định, duy nhất
-            string agentId = "";
-            using (System.Security.Cryptography.MD5 md5 = System.Security.Cryptography.MD5.Create())
-            {
-                byte[] hashBytes = md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes(hardwareRawData));
-                string hashString = BitConverter.ToString(hashBytes).Replace("-", "").ToUpper(); // Chuỗi dạng HEX viết hoa
-
-                // 3. Định dạng chuỗi theo đúng chuẩn xxxxx-xxxxx (10 ký tự, phân tách ở giữa)
-                string part1 = hashString.Substring(0, 5);
-                string part2 = hashString.Substring(5, 5);
-                agentId = $"{part1}-{part2}"; // Kết quả: XXXXX-XXXXX
-            }
+            string agentId = HardwareInfo.GetUniqueAgentID();
 
             return new AgentInfo
             {
@@ -130,7 +84,6 @@ namespace AgentService
                 OSVersion = osVersion,
                 AgentVersion = "1.0.0"
             };
-            MessageBox.Show(osVersion);
         }
 
         // Hàm phụ trợ lấy IP LAN gọn gàng cho fen
@@ -151,9 +104,168 @@ namespace AgentService
             return "127.0.0.1";
         }
 
+        private string GetLoggedOnUsername()
+        {
+            string? activeUsername = TryGetActiveSessionUsername();
+            if (!string.IsNullOrWhiteSpace(activeUsername))
+            {
+                return activeUsername;
+            }
+
+            string serviceUsername = Environment.UserName;
+            if (serviceUsername.EndsWith("$", StringComparison.Ordinal))
+            {
+                return "No logged-in user";
+            }
+
+            return serviceUsername;
+        }
+
+        private static string? TryGetActiveSessionUsername()
+        {
+            string? activeSessionUsername = TryGetUsernameFromActiveSessions();
+            if (!string.IsNullOrWhiteSpace(activeSessionUsername))
+            {
+                return activeSessionUsername;
+            }
+
+            uint sessionId = WTSGetActiveConsoleSessionId();
+            if (sessionId == 0xFFFFFFFF)
+            {
+                return null;
+            }
+
+            string? username = QuerySessionString(sessionId, WTS_INFO_CLASS.WTSUserName);
+            if (string.IsNullOrWhiteSpace(username))
+            {
+                return null;
+            }
+
+            return username;
+        }
+
+        private static string? TryGetUsernameFromActiveSessions()
+        {
+            IntPtr sessionInfoPointer = IntPtr.Zero;
+
+            try
+            {
+                if (!WTSEnumerateSessions(IntPtr.Zero, 0, 1, out sessionInfoPointer, out int sessionCount) ||
+                    sessionInfoPointer == IntPtr.Zero ||
+                    sessionCount <= 0)
+                {
+                    return null;
+                }
+
+                int dataSize = Marshal.SizeOf<WTS_SESSION_INFO>();
+                for (int i = 0; i < sessionCount; i++)
+                {
+                    IntPtr current = IntPtr.Add(sessionInfoPointer, i * dataSize);
+                    WTS_SESSION_INFO sessionInfo = Marshal.PtrToStructure<WTS_SESSION_INFO>(current);
+                    if (sessionInfo.State != WTS_CONNECTSTATE_CLASS.WTSActive)
+                    {
+                        continue;
+                    }
+
+                    string? username = QuerySessionString(sessionInfo.SessionId, WTS_INFO_CLASS.WTSUserName);
+                    if (!string.IsNullOrWhiteSpace(username))
+                    {
+                        return username;
+                    }
+                }
+            }
+            finally
+            {
+                if (sessionInfoPointer != IntPtr.Zero)
+                {
+                    WTSFreeMemory(sessionInfoPointer);
+                }
+            }
+
+            return null;
+        }
+
+        private static string? QuerySessionString(uint sessionId, WTS_INFO_CLASS infoClass)
+        {
+            IntPtr buffer = IntPtr.Zero;
+
+            try
+            {
+                if (!WTSQuerySessionInformation(IntPtr.Zero, sessionId, infoClass, out buffer, out int bytesReturned) ||
+                    buffer == IntPtr.Zero ||
+                    bytesReturned <= 1)
+                {
+                    return null;
+                }
+
+                return Marshal.PtrToStringUni(buffer);
+            }
+            finally
+            {
+                if (buffer != IntPtr.Zero)
+                {
+                    WTSFreeMemory(buffer);
+                }
+            }
+        }
+
+        private enum WTS_INFO_CLASS
+        {
+            WTSUserName = 5
+        }
+
+        private enum WTS_CONNECTSTATE_CLASS
+        {
+            WTSActive,
+            WTSConnected,
+            WTSConnectQuery,
+            WTSShadow,
+            WTSDisconnected,
+            WTSIdle,
+            WTSListen,
+            WTSReset,
+            WTSDown,
+            WTSInit
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct WTS_SESSION_INFO
+        {
+            public uint SessionId;
+
+            [MarshalAs(UnmanagedType.LPWStr)]
+            public string WinStationName;
+
+            public WTS_CONNECTSTATE_CLASS State;
+        }
+
+        [DllImport("kernel32.dll")]
+        private static extern uint WTSGetActiveConsoleSessionId();
+
+        [DllImport("wtsapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool WTSQuerySessionInformation(
+            IntPtr hServer,
+            uint sessionId,
+            WTS_INFO_CLASS wtsInfoClass,
+            out IntPtr ppBuffer,
+            out int pBytesReturned);
+
+        [DllImport("wtsapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool WTSEnumerateSessions(
+            IntPtr hServer,
+            int reserved,
+            int version,
+            out IntPtr ppSessionInfo,
+            out int pCount);
+
+        [DllImport("wtsapi32.dll")]
+        private static extern void WTSFreeMemory(IntPtr pointer);
+
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            await Task.Yield();
+
             // Bọc lót chống Null tuyệt đối: Nếu không tìm thấy thẻ trong JSON thì tự lấy mặc định
             string lanIP = "127.0.0.1";
             string wanIP = "127.0.0.1";
@@ -769,6 +881,20 @@ namespace AgentService
                 _isConnected = false;
                 _logger?.LogWarning("Mất kết nối tới Server. Đã kích hoạt trạng thái chờ Reconnect...");
             }
+        }
+
+        public override async Task StopAsync(CancellationToken cancellationToken)
+        {
+            _isConnected = false;
+
+            try
+            {
+                _stream?.Close();
+                _client?.Close();
+            }
+            catch { }
+
+            await base.StopAsync(cancellationToken);
         }
     }
 }

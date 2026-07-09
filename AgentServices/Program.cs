@@ -12,12 +12,35 @@ namespace AgentServices
     {
         public static void Main(string[] args)
         {
-            CreateHostBuilder(args).Build().Run();
+            try
+            {
+                CreateHostBuilder(args).Build().Run();
+            }
+            catch (Exception ex)
+            {
+                TryWriteStartupError(ex);
+                throw;
+            }
+        }
+
+        private static void TryWriteStartupError(Exception ex)
+        {
+            try
+            {
+                string logPath = Path.Combine(AppContext.BaseDirectory, "AgentServices.startup.log");
+                File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex}{Environment.NewLine}");
+            }
+            catch
+            {
+            }
         }
 
         public static IHostBuilder CreateHostBuilder(string[] args) =>
             Host.CreateDefaultBuilder(args)
-                .UseWindowsService() // Ép chạy ngầm dạng Windows Service
+                .UseWindowsService(options =>
+                {
+                    options.ServiceName = "AgentServices";
+                }) // Ép chạy ngầm dạng Windows Service
                 .ConfigureLogging(logging =>
                 {
                     // ⬅️ ĐÂY RỒI FEN: Xóa sạch các bộ ghi mặc định (EventLog gây sập app)
@@ -30,7 +53,7 @@ namespace AgentServices
                 .ConfigureAppConfiguration((hostingContext, config) =>
                 {
                     config.SetBasePath(AppContext.BaseDirectory);
-                    config.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true);
+                    config.AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
                 })
                 .ConfigureServices((hostContext, services) =>
                 {

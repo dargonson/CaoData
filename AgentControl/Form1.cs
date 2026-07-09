@@ -21,8 +21,10 @@ namespace AgentControl
         private ConcurrentDictionary<string, (long Bytes, DateTime Time)> _downloadSpeedTracker = new ConcurrentDictionary<string, (long, DateTime)>();
         private ConcurrentDictionary<string, string> _downloadLocalPathCache = new ConcurrentDictionary<string, string>();
         private ConcurrentDictionary<string, DateTime> _downloadDbUpdateTracker = new ConcurrentDictionary<string, DateTime>();
+        private ConcurrentDictionary<string, SemaphoreSlim> _agentSendLocks = new ConcurrentDictionary<string, SemaphoreSlim>();
         private HashSet<string> _activeDownloadBatchIds = new HashSet<string>();
         private bool _activeDownloadBatchNotified = true;
+        private bool _isDownloadGridRefreshing = false;
         private DateTime _lastUiUpdate = DateTime.MinValue;
         private Font? _downloadStatusBoldFont;
         public Form1()
@@ -78,6 +80,7 @@ namespace AgentControl
             dgvDownloads.ReadOnly = true;
             dgvDownloads.RowHeadersVisible = false; // Ẩn cột đầu thừa thãi cho gọn
             dgvDownloads.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            typeof(DataGridView).GetProperty("DoubleBuffered", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.SetValue(dgvDownloads, true, null);
 
             // 1. Cột Mã Tải (Ẩn ngầm làm mồi tương tác)
             dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "DownloadID", HeaderText = "Mã Tải", Visible = false }); // [cite: 7]
@@ -114,11 +117,17 @@ namespace AgentControl
             tvRemoteFolders.Font = new Font("Segoe UI", 9F);
             tvRemoteFolders.ItemHeight = 24;
             lvRemoteFiles.SmallImageList = shellImages;
+            dgvDownloads.Enabled = false;
 
             // Khởi tạo Database SQLite ngầm
             await SQLiteHelper.InitializeDatabaseAsync();
             _connectedAgents.Clear();
             await SQLiteHelper.SetAllAgentsOfflineAsync();
+            var startupAgents = await SQLiteHelper.GetAllAgentsAsync();
+            foreach (var agent in startupAgents)
+            {
+                await SQLiteHelper.FailPendingDownloadsByAgentAsync(agent["AgentID"]);
+            }
 
             // Load lại danh sách các Agent cũ đã từng kết nối lên giao diện
             await LoadAllAgentsFromDbAsync();
@@ -137,6 +146,33 @@ namespace AgentControl
             }
             return string.Format("{0:n2} {1}", number, suffixes[counter]);
         }
+
+        private async Task SendPacketToAgentAsync(string agentId, TcpClient client, SocketPacket packet)
+        {
+            if (client == null || !client.Connected)
+            {
+                throw new IOException("Agent socket is not connected.");
+            }
+
+            SemaphoreSlim sendLock = _agentSendLocks.GetOrAdd(agentId, _ => new SemaphoreSlim(1, 1));
+            await sendLock.WaitAsync();
+            try
+            {
+                NetworkStream stream = client.GetStream();
+                string jsonString = JsonSerializer.Serialize(packet);
+                byte[] dataBuffer = Encoding.UTF8.GetBytes(jsonString);
+                byte[] lengthPrefix = BitConverter.GetBytes(dataBuffer.Length);
+
+                await stream.WriteAsync(lengthPrefix, 0, lengthPrefix.Length);
+                await stream.WriteAsync(dataBuffer, 0, dataBuffer.Length);
+                await stream.FlushAsync();
+            }
+            finally
+            {
+                sendLock.Release();
+            }
+        }
+
         private async void btnKetNoi_Click(object sender, EventArgs e)
         {
             if (!_isListening)
@@ -179,6 +215,7 @@ namespace AgentControl
                 var dbAgents = await SQLiteHelper.GetAllAgentsAsync();
                 foreach (var agent in dbAgents)
                 {
+                    await SQLiteHelper.FailPendingDownloadsByAgentAsync(agent["AgentID"]);
                     await SQLiteHelper.SetAgentOfflineAsync(agent["AgentID"]);
                 }
                 await LoadAllAgentsFromDbAsync();
@@ -281,6 +318,10 @@ namespace AgentControl
                                     await SQLiteHelper.SaveOrUpdateAgentAsync(packet.AgentID, info, true);
                                     // [ĐÃ CÓ SẴN] Lưu hoặc cập nhật thông tin Agent vào danh sách quản lý
                                     // [ĐÃ CÓ SẴN CỦA FEN] Lưu thông tin kết nối
+                                    if (_connectedAgents.TryGetValue(packet.AgentID, out var oldAgent) && !ReferenceEquals(oldAgent.Client, client))
+                                    {
+                                        oldAgent.Client?.Close();
+                                    }
                                     _connectedAgents[packet.AgentID] = (client, DateTime.Now);
 
                                     // 🚀 Tự động quét hàng đợi để Resume khi reconnect (Tách luồng an toàn)
@@ -305,15 +346,10 @@ namespace AgentControl
                                                 {
                                                     Type = "REQUEST_DOWNLOAD",
                                                     AgentID = packet.AgentID,
-                                                    Data = Newtonsoft.Json.JsonConvert.SerializeObject(resumeModel) // Dùng full namespace, chấp hết thiếu 'using'
+                                                    Data = JsonSerializer.Serialize(resumeModel)
                                                 };
 
-                                                string jsonPayload = Newtonsoft.Json.JsonConvert.SerializeObject(responsePacket);
-
-                                                // 3. Tận dụng trực tiếp việc ghi Stream của client truyền vào, không gọi hàm ngoài
-                                                byte[] buffer = System.Text.Encoding.UTF8.GetBytes(jsonPayload + "<EOF>");
-                                                var stream = client.GetStream();
-                                                await stream.WriteAsync(buffer, 0, buffer.Length);
+                                                await SendPacketToAgentAsync(packet.AgentID, client, responsePacket);
 
                                                 // 4. Cập nhật trạng thái
                                                 await SQLiteHelper.UpdateDownloadProgressAsync(job.DownloadID, job.DownloadedBytes, "Downloading");
@@ -470,12 +506,18 @@ namespace AgentControl
                     // Tiến hành dọn dẹp khi Agent đứt kết nối
                     if (!string.IsNullOrEmpty(currentAgentID))
                     {
-                        _connectedAgents.TryRemove(currentAgentID, out _);
-                        await SQLiteHelper.SetAgentOfflineAsync(currentAgentID);
-                        this.Invoke(new Action(async () =>
+                        bool isCurrentSocket = _connectedAgents.TryGetValue(currentAgentID, out var activeAgent) && ReferenceEquals(activeAgent.Client, client);
+                        if (isCurrentSocket)
                         {
-                            await LoadAllAgentsFromDbAsync();
-                        }));
+                            _connectedAgents.TryRemove(currentAgentID, out _);
+                            _agentSendLocks.TryRemove(currentAgentID, out _);
+                            await SQLiteHelper.FailPendingDownloadsByAgentAsync(currentAgentID);
+                            await SQLiteHelper.SetAgentOfflineAsync(currentAgentID);
+                            this.Invoke(new Action(async () =>
+                            {
+                                await LoadAllAgentsFromDbAsync();
+                            }));
+                        }
                     }
                 }
             }
@@ -496,9 +538,11 @@ namespace AgentControl
                         if ((DateTime.Now - item.LastSeen).TotalSeconds > 90)
                         {
                             _connectedAgents.TryRemove(agentId, out _);
+                            _agentSendLocks.TryRemove(agentId, out _);
                             item.Client?.Close(); // Ép ngắt kết nối socket cũ công nghệ
 
                             // Cập nhật SQLite và làm mới UI [cite: 885]
+                            await SQLiteHelper.FailPendingDownloadsByAgentAsync(agentId);
                             await SQLiteHelper.SetAgentOfflineAsync(agentId);
                             this.Invoke(new Action(async () =>
                             {
@@ -739,29 +783,43 @@ namespace AgentControl
             return $"{convertFormatSize(bytesPerSecond)}/s";
         }
 
-        private void ApplyDownloadRowStyle(DataGridViewRow row, string status)
+        private bool ApplyDownloadRowStyle(DataGridViewRow row, string status)
         {
+            bool changed = false;
             DataGridViewCell statusCell = row.Cells["Status"];
             statusCell.Style.Font = null;
             statusCell.Style.ForeColor = dgvDownloads.DefaultCellStyle.ForeColor;
-            statusCell.Value = status;
+            changed |= SetCellValueIfChanged(statusCell, status);
 
             if (status.Equals("Error", StringComparison.OrdinalIgnoreCase))
             {
-                row.Cells["Progress"].Value = 0;
-                statusCell.Value = "✖ Error";
+                changed |= SetCellValueIfChanged(row.Cells["Progress"], 0);
+                changed |= SetCellValueIfChanged(statusCell, "✖ Error");
                 statusCell.Style.ForeColor = Color.FromArgb(220, 53, 69);
                 _downloadStatusBoldFont ??= new Font(dgvDownloads.Font, FontStyle.Bold);
                 statusCell.Style.Font = _downloadStatusBoldFont;
             }
             else if (status.Equals("Completed", StringComparison.OrdinalIgnoreCase))
             {
-                row.Cells["Progress"].Value = 100;
-                statusCell.Value = "✓ Complete";
+                changed |= SetCellValueIfChanged(row.Cells["Progress"], 100);
+                changed |= SetCellValueIfChanged(statusCell, "✓ Complete");
                 statusCell.Style.ForeColor = Color.FromArgb(25, 135, 84);
                 _downloadStatusBoldFont ??= new Font(dgvDownloads.Font, FontStyle.Bold);
                 statusCell.Style.Font = _downloadStatusBoldFont;
             }
+
+            return changed;
+        }
+
+        private bool SetCellValueIfChanged(DataGridViewCell cell, object value)
+        {
+            if (Equals(cell.Value, value))
+            {
+                return false;
+            }
+
+            cell.Value = value;
+            return true;
         }
 
         private bool IsFolderItem(ListViewItem item)
@@ -1044,17 +1102,7 @@ namespace AgentControl
 
                 if (client != null && client.Connected)
                 {
-                    var stream = client.GetStream();
-
-                    // Chuỗi hóa gói tin packet
-                    string jsonString = System.Text.Json.JsonSerializer.Serialize(requestPacket);
-                    byte[] dataBuffer = System.Text.Encoding.UTF8.GetBytes(jsonString);
-                    byte[] lengthPrefix = BitConverter.GetBytes(dataBuffer.Length);
-
-                    // Bắn dữ liệu thẳng xuống luồng Socket của máy Agent đang chọn
-                    await stream.WriteAsync(lengthPrefix, 0, lengthPrefix.Length);
-                    await stream.WriteAsync(dataBuffer, 0, dataBuffer.Length);
-                    await stream.FlushAsync();
+                    await SendPacketToAgentAsync(selectedAgentId, client, requestPacket);
                 }
             }
         }
@@ -1091,14 +1139,7 @@ namespace AgentControl
                 {
                     try
                     {
-                        var stream = client.GetStream();
-                        string jsonString = JsonSerializer.Serialize(requestPacket);
-                        byte[] dataBuffer = Encoding.UTF8.GetBytes(jsonString);
-                        byte[] lengthPrefix = BitConverter.GetBytes(dataBuffer.Length);
-
-                        await stream.WriteAsync(lengthPrefix, 0, lengthPrefix.Length);
-                        await stream.WriteAsync(dataBuffer, 0, dataBuffer.Length);
-                        await stream.FlushAsync();
+                        await SendPacketToAgentAsync(selectedAgentId, client, requestPacket);
                         await SQLiteHelper.UpdateDownloadProgressAsync(downloadId, offset, "Downloading");
                     }
                     catch (Exception ex)
@@ -1197,25 +1238,38 @@ namespace AgentControl
 
         private async void tmrUpdateUI_Tick(object sender, EventArgs e)
         {
+            if (_isDownloadGridRefreshing)
+            {
+                return;
+            }
+
+            _isDownloadGridRefreshing = true;
             try
             {
                 // 1. Gọi SQLite lấy toàn bộ danh sách hàng đợi hiện tại
                 var downloadList = await SQLiteHelper.GetAllDownloadsAsync();
+                var rowMap = new Dictionary<string, DataGridViewRow>(StringComparer.OrdinalIgnoreCase);
+                var liveDownloadIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-                // 2. Duyệt qua từng bản ghi để cập nhật hoặc thêm mới vào DataGridView
+                foreach (DataGridViewRow row in dgvDownloads.Rows)
+                {
+                    string rowDownloadId = row.Cells["DownloadID"].Value?.ToString();
+                    if (!string.IsNullOrEmpty(rowDownloadId) && !rowMap.ContainsKey(rowDownloadId))
+                    {
+                        rowMap[rowDownloadId] = row;
+                    }
+                }
+
                 foreach (var job in downloadList)
                 {
-                    DataGridViewRow existingRow = null;
+                    liveDownloadIds.Add(job.DownloadID);
+                }
 
-                    // Kiểm tra xem dòng này đã tồn tại trên GridView chưa bằng DownloadID
-                    foreach (DataGridViewRow row in dgvDownloads.Rows)
-                    {
-                        if (row.Cells["DownloadID"].Value?.ToString() == job.DownloadID)
-                        {
-                            existingRow = row;
-                            break;
-                        }
-                    }
+                // 2. Duyệt qua từng bản ghi để cập nhật hoặc thêm mới vào DataGridView
+                dgvDownloads.SuspendLayout();
+                foreach (var job in downloadList)
+                {
+                    rowMap.TryGetValue(job.DownloadID, out DataGridViewRow existingRow);
 
                     // Tính toán phần trăm tiến độ (%) dựa trên số byte đã nạp
                     int progressPercent = 0;
@@ -1258,12 +1312,16 @@ namespace AgentControl
                     if (existingRow != null)
                     {
                         // 🔄 Nếu dòng đã có sẵn: cập nhật đủ dữ liệu đang thay đổi trong quá trình tải
-                        existingRow.Cells["FileName"].Value = fileName;
-                        existingRow.Cells["TotalSize"].Value = totalSizeStr;
-                        existingRow.Cells["Progress"].Value = progressPercent;
-                        existingRow.Cells["Speed"].Value = speedStr;
-                        ApplyDownloadRowStyle(existingRow, job.Status);
-                        dgvDownloads.InvalidateRow(existingRow.Index);
+                        bool rowChanged = false;
+                        rowChanged |= SetCellValueIfChanged(existingRow.Cells["FileName"], fileName);
+                        rowChanged |= SetCellValueIfChanged(existingRow.Cells["TotalSize"], totalSizeStr);
+                        rowChanged |= SetCellValueIfChanged(existingRow.Cells["Progress"], progressPercent);
+                        rowChanged |= SetCellValueIfChanged(existingRow.Cells["Speed"], speedStr);
+                        rowChanged |= ApplyDownloadRowStyle(existingRow, job.Status);
+                        if (rowChanged)
+                        {
+                            dgvDownloads.InvalidateRow(existingRow.Index);
+                        }
                     }
                     else
                     {
@@ -1277,14 +1335,16 @@ namespace AgentControl
                         newRow.Cells["Progress"].Value = progressPercent;
                         newRow.Cells["Speed"].Value = speedStr;
                         ApplyDownloadRowStyle(newRow, job.Status);
+                        rowMap[job.DownloadID] = newRow;
                     }
                 }
+                dgvDownloads.ResumeLayout();
 
                 // 3. Dọn rác: Nếu file đã bị xóa trong DB thì xóa luôn dòng đó trên UI
                 for (int i = dgvDownloads.Rows.Count - 1; i >= 0; i--)
                 {
                     string gridId = dgvDownloads.Rows[i].Cells["DownloadID"].Value?.ToString();
-                    if (!downloadList.Exists(x => x.DownloadID == gridId))
+                    if (string.IsNullOrEmpty(gridId) || !liveDownloadIds.Contains(gridId))
                     {
                         if (!string.IsNullOrEmpty(gridId))
                         {
@@ -1340,6 +1400,14 @@ namespace AgentControl
                 }
             }
             catch { /* Cách ly lỗi luồng giao diện */ }
+            finally
+            {
+                if (dgvDownloads.IsHandleCreated)
+                {
+                    try { dgvDownloads.ResumeLayout(); } catch { }
+                }
+                _isDownloadGridRefreshing = false;
+            }
         }
     }
 }

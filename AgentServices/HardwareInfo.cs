@@ -1,5 +1,7 @@
-﻿using System;
-using System.Management; // Cần add thêm reference hoặc NuGet System.Management nếu .NET mới báo thiếu
+using System;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.Win32;
 
 namespace AgentService
 {
@@ -7,23 +9,28 @@ namespace AgentService
     {
         public static string GetUniqueAgentID()
         {
+            string rawId = string.Empty;
+
             try
             {
-                string drive = Environment.GetFolderPath(Environment.SpecialFolder.System).Substring(0, 1);
-                using (var dsk = new ManagementObject($"win32_logicaldisk.deviceid=\"{drive}:\""))
+                using (RegistryKey? key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Cryptography"))
                 {
-                    dsk.Get();
-                    string volumeSerial = dsk["VolumeSerialNumber"]?.ToString() ?? "";
-                    if (!string.IsNullOrEmpty(volumeSerial))
-                    {
-                        return "AGT-" + volumeSerial; // Trả về ID độc nhất dựa trên Serial ổ cứng cài hệ điều hành
-                    }
+                    rawId = key?.GetValue("MachineGuid")?.ToString() ?? string.Empty;
                 }
             }
             catch { }
 
-            // Phương án dự phòng nếu không bốc được phần cứng thì tự đẻ GUID ngẫu nhiên
-            return "AGT-GEN-" + Guid.NewGuid().ToString().Substring(0, 8).ToUpper();
+            if (string.IsNullOrWhiteSpace(rawId))
+            {
+                rawId = $"{Environment.MachineName}|{Environment.UserDomainName}|{Environment.OSVersion.VersionString}";
+            }
+
+            using (MD5 md5 = MD5.Create())
+            {
+                byte[] hashBytes = md5.ComputeHash(Encoding.UTF8.GetBytes(rawId));
+                string hashString = BitConverter.ToString(hashBytes).Replace("-", "").ToUpperInvariant();
+                return $"AGT-{hashString.Substring(0, 5)}-{hashString.Substring(5, 5)}";
+            }
         }
     }
 }
