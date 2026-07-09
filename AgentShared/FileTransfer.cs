@@ -63,4 +63,25 @@ namespace AgentShared
         public long DownloadedBytes { get; set; }
         public long TotalBytes { get; set; }
     }
+
+    public class RemoteFolderFilesRequest
+    {
+        public string RequestID { get; set; } = string.Empty;
+        public string RemoteRootPath { get; set; } = string.Empty;
+    }
+
+    public class RemoteFolderFilesResponse
+    {
+        public string RequestID { get; set; } = string.Empty;
+        public string RemoteRootPath { get; set; } = string.Empty;
+        public List<RemoteFolderFileEntry> Files { get; set; } = new List<RemoteFolderFileEntry>();
+        public List<string> Errors { get; set; } = new List<string>();
+    }
+
+    public class RemoteFolderFileEntry
+    {
+        public string RemotePath { get; set; } = string.Empty;
+        public string RelativePath { get; set; } = string.Empty;
+        public long Size { get; set; }
+    }
 }

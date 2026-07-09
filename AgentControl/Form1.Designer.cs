@@ -44,6 +44,7 @@
             ColDate = new ColumnHeader();
             dgvDownloads = new DataGridView();
             tmrUpdateUI = new System.Windows.Forms.Timer(components);
+            btncleardrv = new Button();
             panelHeader.SuspendLayout();
             panelZone1.SuspendLayout();
             panelZone2.SuspendLayout();
@@ -52,6 +53,7 @@
             // 
             // panelHeader
             // 
+            panelHeader.Controls.Add(btncleardrv);
             panelHeader.Controls.Add(btnKetNoi);
             panelHeader.Controls.Add(btnCopy);
             panelHeader.Controls.Add(brndel);
@@ -186,8 +188,18 @@
             // 
             // tmrUpdateUI
             // 
-            tmrUpdateUI.Interval = 500;
+            tmrUpdateUI.Interval = 1000;
             tmrUpdateUI.Tick += tmrUpdateUI_Tick;
+            // 
+            // btncleardrv
+            // 
+            btncleardrv.Location = new Point(1434, 12);
+            btncleardrv.Name = "btncleardrv";
+            btncleardrv.Size = new Size(112, 42);
+            btncleardrv.TabIndex = 3;
+            btncleardrv.Text = "Clear";
+            btncleardrv.UseVisualStyleBackColor = true;
+            btncleardrv.Click += btncleardrv_Click;
             // 
             // Form1
             // 
@@ -226,5 +238,6 @@
         private NHFUiControls.ListBoxNHF ListboxAgents;
         private DataGridView dgvDownloads;
         private System.Windows.Forms.Timer tmrUpdateUI;
+        private Button btncleardrv;
     }
 }

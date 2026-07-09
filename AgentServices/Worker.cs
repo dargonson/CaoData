@@ -23,7 +23,7 @@ namespace AgentService
         private NetworkStream? _stream;
         private bool _isConnected = false;
         private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
-        private readonly SemaphoreSlim _downloadLock = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _downloadLock = new SemaphoreSlim(3, 3);
 
         // Chu kỳ Reconnect lũy tiến theo yêu cầu: 5s, 10s, 20s, 30s
         private readonly int[] _reconnectDelays = { 5, 10, 20, 30 };
@@ -355,6 +355,7 @@ namespace AgentService
             {
                 _logger?.LogInformation("Thử kết nối {Profile}: {Ip}:{Port}", profileName, ip, port);
                 client = new TcpClient();
+                client.NoDelay = true;
 
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
                 timeoutCts.CancelAfter(timeoutMs);
@@ -398,18 +399,35 @@ namespace AgentService
             {
                 if (!_isConnected || _stream == null) return;
 
-                string json = JsonSerializer.Serialize(packet);
-                byte[] dataBytes = Encoding.UTF8.GetBytes(json);
-                byte[] sizeBytes = BitConverter.GetBytes(dataBytes.Length);
+                await TransferFrameProtocol.WriteJsonPacketAsync(_stream, packet);
 
                 // Gửi 4 bytes chiều dài trước, gửi dữ liệu chuỗi JSON theo sau
-                await _stream.WriteAsync(sizeBytes, 0, 4);
-                await _stream.WriteAsync(dataBytes, 0, dataBytes.Length);
-                await _stream.FlushAsync();
             }
             catch
             {
                 _isConnected = false; // Gửi lỗi lập tức coi như mất mạng để kích hoạt luồng Reconnect
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
+        }
+
+        private async Task SendDownloadChunkAsync(FileChunkPacket chunk, byte[] buffer, int count, CancellationToken token)
+        {
+            if (!_isConnected || _stream == null) return;
+
+            await _sendLock.WaitAsync(token);
+            try
+            {
+                if (!_isConnected || _stream == null) return;
+
+                await TransferFrameProtocol.WriteBinaryDownloadChunkAsync(_stream, chunk, buffer, count, token);
+            }
+            catch
+            {
+                _isConnected = false;
+                throw;
             }
             finally
             {
@@ -437,6 +455,99 @@ namespace AgentService
         }
 
         // Tính năng số 1: Gửi thông tin máy cho Server
+        private async Task SendRemoteFolderFilesAsync(string agentId, string requestData)
+        {
+            RemoteFolderFilesRequest? request = null;
+            var response = new RemoteFolderFilesResponse();
+
+            try
+            {
+                request = JsonSerializer.Deserialize<RemoteFolderFilesRequest>(requestData);
+                if (request == null || string.IsNullOrWhiteSpace(request.RemoteRootPath))
+                {
+                    return;
+                }
+
+                response.RequestID = request.RequestID;
+                response.RemoteRootPath = request.RemoteRootPath;
+
+                if (!Directory.Exists(request.RemoteRootPath))
+                {
+                    response.Errors.Add("Folder khong ton tai hoac khong truy cap duoc.");
+                }
+                else
+                {
+                    foreach (string filePath in EnumerateFilesSafe(request.RemoteRootPath, response.Errors))
+                    {
+                        try
+                        {
+                            var fileInfo = new FileInfo(filePath);
+                            response.Files.Add(new RemoteFolderFileEntry
+                            {
+                                RemotePath = fileInfo.FullName,
+                                RelativePath = Path.GetRelativePath(request.RemoteRootPath, fileInfo.FullName),
+                                Size = fileInfo.Length
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            response.Errors.Add($"{filePath}: {ex.Message}");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                response.RequestID = request?.RequestID ?? string.Empty;
+                response.RemoteRootPath = request?.RemoteRootPath ?? string.Empty;
+                response.Errors.Add(ex.Message);
+            }
+
+            await SendPacketAsync(new SocketPacket
+            {
+                Type = "GET_FOLDER_FILES_RESPONSE",
+                AgentID = agentId,
+                Data = JsonSerializer.Serialize(response)
+            });
+        }
+
+        private IEnumerable<string> EnumerateFilesSafe(string rootPath, List<string> errors)
+        {
+            IEnumerable<string> files = Array.Empty<string>();
+            IEnumerable<string> directories = Array.Empty<string>();
+
+            try
+            {
+                files = Directory.EnumerateFiles(rootPath);
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"{rootPath}: {ex.Message}");
+            }
+
+            foreach (string file in files)
+            {
+                yield return file;
+            }
+
+            try
+            {
+                directories = Directory.EnumerateDirectories(rootPath);
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"{rootPath}: {ex.Message}");
+            }
+
+            foreach (string directory in directories)
+            {
+                foreach (string file in EnumerateFilesSafe(directory, errors))
+                {
+                    yield return file;
+                }
+            }
+        }
+
         private async Task SendRegisterInfoAsync()
         {
             try
@@ -568,7 +679,10 @@ namespace AgentService
                         else if (packet.Type == "GET_DIRECTORY")
                         {
                             string targetPath = packet.Data; // Đường dẫn Server muốn cào (Ví dụ: C:\Users)
-                            var dirContent = new RemoteDirectoryContent();
+                            var dirContent = new RemoteDirectoryContent
+                            {
+                                CurrentPath = targetPath
+                            };
 
                             try
                             {
@@ -702,21 +816,16 @@ namespace AgentService
                                                 Base64Data = string.Empty
                                             };
 
-                                            await SendPacketAsync(new SocketPacket
-                                            {
-                                                Type = "DOWNLOAD_CHUNK",
-                                                AgentID = packet.AgentID,
-                                                Data = JsonSerializer.Serialize(emptyChunk)
-                                            });
+                                            await SendDownloadChunkAsync(emptyChunk, Array.Empty<byte>(), 0, token);
                                             return;
                                         }
 
                                         // Định nghĩa kích thước mỗi khối băm nhỏ (Buffer Size = 256KB tăng tốc độ truyền tải)
-                                        int bufferSize = 256 * 1024;
+                                        int bufferSize = 1024 * 1024;
                                         byte[] buffer = new byte[bufferSize];
 
                                         // 3. Mở FileStream chế độ Read và Share để đọc cuốn chiếu, không khóa file hệ thống
-                                        using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                                        using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, bufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan))
                                         {
                                             // Nhảy cóc đến vị trí Offset được yêu cầu
                                             fs.Seek(currentOffset, SeekOrigin.Begin);
@@ -726,9 +835,6 @@ namespace AgentService
                                             while ((bytesRead = await fs.ReadAsync(buffer, 0, buffer.Length)) > 0)
                                             {
                                                 // Trích xuất mảng byte thực tế đọc được từ file
-                                                byte[] actualBytes = new byte[bytesRead];
-                                                Buffer.BlockCopy(buffer, 0, actualBytes, 0, bytesRead);
-
                                                 // Đóng gói dữ liệu sang mô hình FileChunkPacket
                                                 var chunk = new FileChunkPacket
                                                 {
@@ -738,25 +844,11 @@ namespace AgentService
                                                     Offset = currentOffset,
                                                     ChunkSize = bytesRead,
                                                     IsLastChunk = (currentOffset + bytesRead >= totalBytes), // Đánh dấu nếu là mảnh cuối [cite: 15]
-                                                    Base64Data = Convert.ToBase64String(actualBytes) // Chuyển sang Base64 để nhét vào chuỗi JSON [cite: 17]
+                                                    Base64Data = string.Empty
                                                 };
 
                                                 // Gói vào SocketPacket chung để bắn lên mạng
-                                                SocketPacket chunkPacket = new SocketPacket
-                                                {
-                                                    Type = "DOWNLOAD_CHUNK",
-                                                    AgentID = packet.AgentID, // Trả ngược lại đúng ID của Agent này
-                                                    Data = JsonSerializer.Serialize(chunk)
-                                                };
-
-                                                // Chuỗi hóa gói tin và bọc 4 bytes độ dài đầu gói chống dính tin
-                                                string jsonString = JsonSerializer.Serialize(chunkPacket);
-                                                byte[] dataBuffer = Encoding.UTF8.GetBytes(jsonString);
-                                                byte[] lengthPrefix = BitConverter.GetBytes(dataBuffer.Length);
-
-                                                // Bắn lên Server qua luồng NetworkStream ngầm của Agent
-                                                // Lưu ý: Biến 'stream' ở đây là NetworkStream kết nối của Agent tới Server nhé fen
-                                                await SendPacketAsync(chunkPacket);
+                                                await SendDownloadChunkAsync(chunk, buffer, bytesRead, token);
 
                                                 // Cập nhật lại vị trí dịch chuyển tiếp theo [cite: 6]
                                                 currentOffset += bytesRead;
@@ -780,6 +872,15 @@ namespace AgentService
                                     }
                                 });
                             }
+                        }
+
+                        if (packet.Type == "GET_FOLDER_FILES")
+                        {
+                            string requestData = packet.Data;
+                            _ = Task.Run(async () =>
+                            {
+                                await SendRemoteFolderFilesAsync(packet.AgentID, requestData);
+                            });
                         }
 
                         if (packet.Type == "BROWSE_DRIVES" || packet.Type == "GET_DRIVES")
@@ -813,7 +914,10 @@ namespace AgentService
                             string targetPath = packet.Data; // Đường dẫn cần cào (Ví dụ: C:\ hoặc C:\Users)
                             _logger?.LogInformation("Tiến hành cào nhanh thư mục: {Path}", targetPath);
 
-                            var dirContent = new RemoteDirectoryContent();
+                            var dirContent = new RemoteDirectoryContent
+                            {
+                                CurrentPath = targetPath
+                            };
 
                             try
                             {
@@ -833,6 +937,15 @@ namespace AgentService
                                                 (info.Attributes & System.IO.FileAttributes.System) == 0)
                                             {
                                                 dirContent.SubFolders.Add(info.FullName);
+                                                dirContent.Folders.Add(new RemoteFileSystemEntry
+                                                {
+                                                    FullPath = info.FullName,
+                                                    Name = info.Name,
+                                                    IsFolder = true,
+                                                    Size = 0,
+                                                    LastWriteTime = info.LastWriteTime,
+                                                    Extension = string.Empty
+                                                });
                                             }
                                         }
                                         catch { /* Bỏ qua các folder lỗi quyền riêng lẻ để tiếp tục vòng lặp */ }
@@ -848,6 +961,15 @@ namespace AgentService
                                             if ((info.Attributes & System.IO.FileAttributes.Hidden) == 0)
                                             {
                                                 dirContent.Files.Add(info.FullName);
+                                                dirContent.FileEntries.Add(new RemoteFileSystemEntry
+                                                {
+                                                    FullPath = info.FullName,
+                                                    Name = info.Name,
+                                                    IsFolder = false,
+                                                    Size = info.Length,
+                                                    LastWriteTime = info.LastWriteTime,
+                                                    Extension = info.Extension
+                                                });
                                             }
                                         }
                                         catch { }

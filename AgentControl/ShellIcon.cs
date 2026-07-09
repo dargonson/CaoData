@@ -30,6 +30,8 @@ public static class ShellIcon
     private const uint SHGFI_ICON = 0x100;
     private const uint SHGFI_SMALLICON = 0x1;
     private const uint SHGFI_USEFILEATTRIBUTES = 0x10;
+    private const uint FILE_ATTRIBUTE_DIRECTORY = 0x10;
+    private const uint FILE_ATTRIBUTE_NORMAL = 0x80;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct IMAGELISTDRAWPARAMS
@@ -104,6 +106,28 @@ public static class ShellIcon
                 (uint)Marshal.SizeOf(typeof(SHFILEINFO)),
                 flags | SHGFI_USEFILEATTRIBUTES);
         }
+
+        if (shinfo.hIcon == IntPtr.Zero)
+            return SystemIcons.WinLogo;
+
+        Icon icon = (Icon)Icon.FromHandle(shinfo.hIcon).Clone();
+        DestroyIcon(shinfo.hIcon);
+
+        return icon;
+    }
+
+    public static Icon GetSmallIcon(string path, bool isDirectory)
+    {
+        SHFILEINFO shinfo = new SHFILEINFO();
+        uint attributes = isDirectory ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+        uint flags = SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES;
+
+        SHGetFileInfo(
+            path,
+            attributes,
+            ref shinfo,
+            (uint)Marshal.SizeOf(typeof(SHFILEINFO)),
+            flags);
 
         if (shinfo.hIcon == IntPtr.Zero)
             return SystemIcons.WinLogo;

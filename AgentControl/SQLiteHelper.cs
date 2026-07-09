@@ -387,6 +387,60 @@ namespace AgentControl
             }
         }
 
+        public static async Task DeleteDownloadsAsync(IEnumerable<string> downloadIds)
+        {
+            var ids = downloadIds
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (ids.Count == 0)
+            {
+                return;
+            }
+
+            await DbLock.WaitAsync();
+            try
+            {
+                using (var connection = await OpenConnectionAsync())
+                using (var transaction = connection.BeginTransaction())
+                {
+                    using (var cmd = new SQLiteCommand("DELETE FROM DownloadQueue WHERE DownloadID = @DownloadID;", connection, transaction))
+                    {
+                        var idParameter = cmd.Parameters.Add("@DownloadID", System.Data.DbType.String);
+                        foreach (string id in ids)
+                        {
+                            idParameter.Value = id;
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+                    }
+
+                    transaction.Commit();
+                }
+            }
+            finally
+            {
+                DbLock.Release();
+            }
+        }
+
+        public static async Task ClearDownloadQueueAsync()
+        {
+            await DbLock.WaitAsync();
+            try
+            {
+                using (var connection = await OpenConnectionAsync())
+                using (var cmd = new SQLiteCommand("DELETE FROM DownloadQueue;", connection))
+                {
+                    await cmd.ExecuteNonQueryAsync();
+                }
+            }
+            finally
+            {
+                DbLock.Release();
+            }
+        }
+
 
 
 
