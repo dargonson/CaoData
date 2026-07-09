@@ -23,7 +23,7 @@ namespace NHFUiControls
             set
             {
                 ItemHeight = value;
-                Refresh();
+                //Refresh();
             }
         }
 
@@ -40,7 +40,8 @@ namespace NHFUiControls
         {
             // Giữ nguyên các dòng cấu hình cũ của fen...
             this.SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
-            DrawMode = DrawMode.OwnerDrawVariable;
+            //DrawMode = DrawMode.OwnerDrawVariable;
+            DrawMode = DrawMode.OwnerDrawFixed;
             CardHeight = 95;
             BorderStyle = BorderStyle.None;
             BackColor = Color.FromArgb(235, 241, 250);
@@ -80,7 +81,7 @@ namespace NHFUiControls
             int oldIndex = hoveredIndex;
             hoveredIndex = -1;
             InvalidateItem(oldIndex);
-            this.Refresh();
+            //this.Refresh();
         }
 
         private void ListBoxNHF_SelectedIndexChanged(object sender, EventArgs e)

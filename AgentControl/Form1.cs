@@ -600,10 +600,20 @@ namespace AgentControl
         }
 
         // Xử lý đọc gói tin từ Agent đổ về (Chống dính gói bằng 4 bytes độ dài) [cite: 876, 991]
+        private static bool IsConnectionLostException(Exception ex)
+        {
+            return ex is EndOfStreamException ||
+                   ex is ObjectDisposedException ||
+                   ex is SocketException ||
+                   (ex is IOException && ex.InnerException is SocketException);
+        }
+
         private async Task HandleBinaryDownloadChunkAsync(NetworkStream stream, int frameSize)
         {
             FileChunkPacket? chunk = null;
             int bodySize = 0;
+            bool bodyCopyStarted = false;
+            bool bodyCopyCompleted = false;
 
             try
             {
@@ -641,7 +651,9 @@ namespace AgentControl
                 using (FileStream fs = new FileStream(localPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite, 128 * 1024, true))
                 {
                     fs.Seek(chunk.Offset, SeekOrigin.Begin);
+                    bodyCopyStarted = true;
                     await TransferFrameProtocol.CopyExactToAsync(stream, fs, bodySize);
+                    bodyCopyCompleted = true;
                     await fs.FlushAsync();
                 }
 
@@ -670,15 +682,45 @@ namespace AgentControl
                     _downloadDbUpdateTracker.TryRemove(chunk.DownloadID, out _);
                 }
             }
+            catch (Exception ex) when (IsConnectionLostException(ex))
+            {
+                Console.WriteLine($"Mat ket noi khi dang nhan binary download chunk: {ex.Message}");
+                if (chunk != null && !string.IsNullOrEmpty(chunk.DownloadID))
+                {
+                    long currentDownloaded = Math.Max(0, chunk.Offset);
+                    await SQLiteHelper.UpdateDownloadProgressAsync(chunk.DownloadID, currentDownloaded, chunk.TotalBytes, "Waiting Agent");
+                    _downloadSpeedTracker.TryRemove(chunk.DownloadID, out _);
+                    _downloadDbUpdateTracker.TryRemove(chunk.DownloadID, out _);
+                }
+
+                throw;
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"Loi xu ly binary download chunk: {ex.Message}");
                 if (chunk != null && !string.IsNullOrEmpty(chunk.DownloadID))
                 {
+                    if (!bodyCopyStarted && bodySize > 0)
+                    {
+                        try
+                        {
+                            await TransferFrameProtocol.DrainExactAsync(stream, bodySize);
+                        }
+                        catch
+                        {
+                            throw;
+                        }
+                    }
+
                     long currentDownloaded = Math.Max(0, chunk.Offset);
                     await SQLiteHelper.UpdateDownloadProgressAsync(chunk.DownloadID, currentDownloaded, chunk.TotalBytes, "Error");
                     _downloadSpeedTracker.TryRemove(chunk.DownloadID, out _);
                     _downloadDbUpdateTracker.TryRemove(chunk.DownloadID, out _);
+
+                    if (bodyCopyStarted && !bodyCopyCompleted)
+                    {
+                        throw;
+                    }
                 }
             }
         }
