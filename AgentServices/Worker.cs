@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Net.Sockets;
 using System.Text;
@@ -23,6 +23,8 @@ namespace AgentService
         private TcpClient? _client;
         private NetworkStream? _stream;
         private bool _isConnected = false;
+        private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _downloadLock = new SemaphoreSlim(1, 1);
 
         // Chu kỳ Reconnect lũy tiến theo yêu cầu: 5s, 10s, 20s, 30s
         private readonly int[] _reconnectDelays = { 5, 10, 20, 30 };
@@ -156,13 +158,16 @@ namespace AgentService
             string lanIP = "127.0.0.1";
             string wanIP = "127.0.0.1";
             int port = 9000;
+            int connectionTimeoutMs = 8000;
 
             if (_configuration != null)
             {
-                lanIP = _configuration["ConnectionConfig:ServerLAN"] ?? "127.0.0.1";
-                wanIP = _configuration["ConnectionConfig:ServerWAN"] ?? "127.0.0.1";
+                lanIP = (_configuration["ConnectionConfig:ServerLAN"] ?? "127.0.0.1").Trim();
+                wanIP = (_configuration["ConnectionConfig:ServerWAN"] ?? "127.0.0.1").Trim();
                 int.TryParse(_configuration["ConnectionConfig:Port"], out port);
                 if (port == 0) port = 9000;
+                int.TryParse(_configuration["ConnectionConfig:ConnectionTimeoutMs"], out connectionTimeoutMs);
+                if (connectionTimeoutMs < 1000) connectionTimeoutMs = 8000;
             }
 
             string agentID = HardwareInfo.GetUniqueAgentID();
@@ -180,13 +185,13 @@ namespace AgentService
                         _logger?.LogInformation("Đang thử kết nối tới Server...");
 
                         // 1. Ưu tiên kết nối mạng LAN trước
-                        _isConnected = await TryConnectAsync(lanIP, port, stoppingToken);
+                        _isConnected = await TryConnectAsync(lanIP, port, connectionTimeoutMs, "LAN", stoppingToken);
 
                         // 2. Nếu LAN thất bại, tự động chuyển sang WAN
                         if (!_isConnected)
                         {
                             _logger?.LogWarning("Kết nối LAN thất bại. Đang chuyển sang thử WAN...");
-                            _isConnected = await TryConnectAsync(wanIP, port, stoppingToken);
+                            _isConnected = await TryConnectAsync(wanIP, port, connectionTimeoutMs, "WAN", stoppingToken);
                         }
 
                         if (_isConnected)
@@ -225,30 +230,58 @@ namespace AgentService
         }
 
         // Hàm thử kết nối Socket
-        private async Task<bool> TryConnectAsync(string ip, int port, CancellationToken token)
+        private async Task<bool> TryConnectAsync(string ip, int port, int timeoutMs, string profileName, CancellationToken token)
         {
-            try
+            if (string.IsNullOrWhiteSpace(ip))
             {
-                _client = new TcpClient();
-                // Sử dụng Timeout ngắn để tránh việc đợi mạng WAN quá lâu gây nghẽn luồng
-                var connectTask = _client.ConnectAsync(ip, port, token).AsTask();
-                if (await Task.WhenAny(connectTask, Task.Delay(4000, token)) == connectTask)
-                {
-                    await connectTask; // Hoàn thành kết nối thành công
-                    _stream = _client.GetStream();
-                    return true;
-                }
-                return false; // Quá 4 giây không kết nối được xem như tạch
-            }
-            catch
-            {
+                _logger?.LogWarning("Bỏ qua kết nối {Profile}: chưa cấu hình địa chỉ Server.", profileName);
                 return false;
             }
+
+            TcpClient? client = null;
+            try
+            {
+                _logger?.LogInformation("Thử kết nối {Profile}: {Ip}:{Port}", profileName, ip, port);
+                client = new TcpClient();
+
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+                timeoutCts.CancelAfter(timeoutMs);
+
+                await client.ConnectAsync(ip, port, timeoutCts.Token);
+                if (client.Connected)
+                {
+                    _client?.Close();
+                    _client = client;
+                    _stream = _client.GetStream();
+                    _logger?.LogInformation("Kết nối {Profile} thành công: {Ip}:{Port}", profileName, ip, port);
+                    return true;
+                }
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                _logger?.LogWarning("Kết nối {Profile} timeout sau {TimeoutMs}ms: {Ip}:{Port}", profileName, timeoutMs, ip, port);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning("Kết nối {Profile} thất bại {Ip}:{Port} - {Message}", profileName, ip, port, ex.Message);
+            }
+            finally
+            {
+                if (!ReferenceEquals(client, _client))
+                {
+                    client?.Close();
+                }
+            }
+
+            return false;
         }
 
         // Hàm gửi gói tin chuẩn mã hóa kích thước 4 bytes đầu chống dính gói
         private async Task SendPacketAsync(SocketPacket packet)
         {
+            if (!_isConnected || _stream == null) return;
+
+            await _sendLock.WaitAsync();
             try
             {
                 if (!_isConnected || _stream == null) return;
@@ -266,6 +299,29 @@ namespace AgentService
             {
                 _isConnected = false; // Gửi lỗi lập tức coi như mất mạng để kích hoạt luồng Reconnect
             }
+            finally
+            {
+                _sendLock.Release();
+            }
+        }
+
+        private async Task SendDownloadErrorAsync(string agentId, string downloadId, string remotePath, string message, long downloadedBytes = 0, long totalBytes = 0)
+        {
+            var errorPacket = new DownloadErrorPacket
+            {
+                DownloadID = downloadId,
+                RemotePath = remotePath,
+                ErrorMessage = message,
+                DownloadedBytes = downloadedBytes,
+                TotalBytes = totalBytes
+            };
+
+            await SendPacketAsync(new SocketPacket
+            {
+                Type = "DOWNLOAD_ERROR",
+                AgentID = agentId,
+                Data = JsonSerializer.Serialize(errorPacket)
+            });
         }
 
         // Tính năng số 1: Gửi thông tin máy cho Server
@@ -287,20 +343,8 @@ namespace AgentService
                     Data = jsonPayload        // Điền chuỗi JSON thông tin chi tiết vào thuộc tính Data kiểu string
                 };
 
-                // 4. Chuỗi hóa toàn bộ gói tin để gửi qua Socket
-                string jsonString = System.Text.Json.JsonSerializer.Serialize(registerPacket);
-                byte[] dataBuffer = System.Text.Encoding.UTF8.GetBytes(jsonString);
-                byte[] lengthPrefix = BitConverter.GetBytes(dataBuffer.Length);
-
-                // 5. Bắn qua luồng mạng Socket
-                if (_stream != null && _stream.CanWrite)
-                {
-                    await _stream.WriteAsync(lengthPrefix, 0, lengthPrefix.Length);
-                    await _stream.WriteAsync(dataBuffer, 0, dataBuffer.Length);
-                    await _stream.FlushAsync();
-
-                    _logger?.LogInformation("Đã gửi gói REGISTER đăng ký thông tin máy lên Server thành công.");
-                }
+                await SendPacketAsync(registerPacket);
+                _logger?.LogInformation("Đã gửi gói REGISTER đăng ký thông tin máy lên Server thành công.");
             }
             catch (Exception ex)
             {
@@ -510,24 +554,50 @@ namespace AgentService
                                 // Khởi chạy một luồng Task độc lập để băm file, tránh làm nghẽn mạch Socket chính của Agent
                                 _ = Task.Run(async () =>
                                 {
+                                    await _downloadLock.WaitAsync(token);
+                                    DownloadRequestModel? request = null;
+                                    long currentOffset = 0;
+                                    long totalBytes = 0;
                                     try
                                     {
                                         // 1. Giải mã gói yêu cầu từ Server
-                                        var request = JsonSerializer.Deserialize<DownloadRequestModel>(packet.Data);
+                                        request = JsonSerializer.Deserialize<DownloadRequestModel>(packet.Data);
                                         if (request == null) return;
 
                                         string filePath = request.RemotePath;
+                                        currentOffset = request.Offset;
 
                                         // 2. Kiểm tra xem file ngoài đời thực có tồn tại không [cite: 12]
                                         if (!File.Exists(filePath))
                                         {
-                                            // Nếu không tồn tại file, fen có thể bắn một gói tin báo lỗi về Server (tùy chọn)
+                                            await SendDownloadErrorAsync(packet.AgentID, request.DownloadID, filePath, "File không còn tồn tại hoặc đã bị antivirus xóa.", currentOffset, totalBytes);
                                             return;
                                         }
 
                                         FileInfo fileInfo = new FileInfo(filePath);
-                                        long totalBytes = fileInfo.Length;
-                                        long currentOffset = request.Offset; // Vị trí bắt đầu đọc (VD: 0 nếu tải mới, hoặc X bytes nếu Resume)
+                                        totalBytes = fileInfo.Length;
+
+                                        if (totalBytes == 0)
+                                        {
+                                            var emptyChunk = new FileChunkPacket
+                                            {
+                                                DownloadID = request.DownloadID,
+                                                RemotePath = filePath,
+                                                TotalBytes = 0,
+                                                Offset = 0,
+                                                ChunkSize = 0,
+                                                IsLastChunk = true,
+                                                Base64Data = string.Empty
+                                            };
+
+                                            await SendPacketAsync(new SocketPacket
+                                            {
+                                                Type = "DOWNLOAD_CHUNK",
+                                                AgentID = packet.AgentID,
+                                                Data = JsonSerializer.Serialize(emptyChunk)
+                                            });
+                                            return;
+                                        }
 
                                         // Định nghĩa kích thước mỗi khối băm nhỏ (Buffer Size = 256KB tăng tốc độ truyền tải)
                                         int bufferSize = 256 * 1024;
@@ -536,11 +606,11 @@ namespace AgentService
                                         // 3. Mở FileStream chế độ Read và Share để đọc cuốn chiếu, không khóa file hệ thống
                                         using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
                                         {
-                                            // Nhảy cóc đến vị trí Offset được yêu cầu 
+                                            // Nhảy cóc đến vị trí Offset được yêu cầu
                                             fs.Seek(currentOffset, SeekOrigin.Begin);
 
                                             int bytesRead;
-                                            // Vòng lặp đọc file cuốn chiếu cho đến hết 
+                                            // Vòng lặp đọc file cuốn chiếu cho đến hết
                                             while ((bytesRead = await fs.ReadAsync(buffer, 0, buffer.Length)) > 0)
                                             {
                                                 // Trích xuất mảng byte thực tế đọc được từ file
@@ -559,7 +629,7 @@ namespace AgentService
                                                     Base64Data = Convert.ToBase64String(actualBytes) // Chuyển sang Base64 để nhét vào chuỗi JSON [cite: 17]
                                                 };
 
-                                                // Gói vào SocketPacket chung để bắn lên mạng 
+                                                // Gói vào SocketPacket chung để bắn lên mạng
                                                 SocketPacket chunkPacket = new SocketPacket
                                                 {
                                                     Type = "DOWNLOAD_CHUNK",
@@ -580,13 +650,21 @@ namespace AgentService
                                                 currentOffset += bytesRead;
 
                                                 // Mẹo nhỏ: Thêm một khoảng Delay cực ngắn (1-2ms) nếu muốn giảm tải CPU cho máy Agent khi tải file quá lớn
-                                                // await Task.Delay(1); 
+                                                // await Task.Delay(1);
                                             }
                                         }
                                     }
                                     catch (Exception ex)
                                     {
                                         Console.WriteLine($"Lỗi băm file phía Agent: {ex.Message}");
+                                        if (request != null)
+                                        {
+                                            await SendDownloadErrorAsync(packet.AgentID, request.DownloadID, request.RemotePath, ex.Message, currentOffset, totalBytes);
+                                        }
+                                    }
+                                    finally
+                                    {
+                                        _downloadLock.Release();
                                     }
                                 });
                             }

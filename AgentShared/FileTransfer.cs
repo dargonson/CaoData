@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace AgentShared
@@ -53,5 +53,14 @@ namespace AgentShared
         public int ChunkSize { get; set; }                      // Độ dài thực của mảng byte đợt này
         public bool IsLastChunk { get; set; }                   // Đánh dấu đây có phải khúc cuối cùng chưa
         public string Base64Data { get; set; } = string.Empty;  // Dữ liệu nhị phân băm nhỏ đã chuyển sang chuỗi Base64
+    }
+
+    public class DownloadErrorPacket
+    {
+        public string DownloadID { get; set; } = string.Empty;
+        public string RemotePath { get; set; } = string.Empty;
+        public string ErrorMessage { get; set; } = string.Empty;
+        public long DownloadedBytes { get; set; }
+        public long TotalBytes { get; set; }
     }
 }

@@ -16,4 +16,11 @@
     <ProjectReference Include="..\AgentShared\AgentShared.csproj" />
     <ProjectReference Include="..\NHFUiControls\NHFUiControls\NHFUiControls.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+  </ItemGroup>
 </Project>
