@@ -62,12 +62,28 @@ namespace AgentControl
             public string AgentId { get; }
             public string FullPath { get; }
             public bool IsFolder { get; }
+            public long Size { get; }
 
-            public RemoteFileItemTag(string agentId, string fullPath, bool isFolder)
+            public RemoteFileItemTag(string agentId, string fullPath, bool isFolder, long size = 0)
             {
                 AgentId = agentId;
                 FullPath = fullPath;
                 IsFolder = isFolder;
+                Size = size;
+            }
+        }
+
+        private sealed class DownloadFilePlan
+        {
+            public string RemotePath { get; }
+            public string LocalPath { get; }
+            public long TotalBytes { get; }
+
+            public DownloadFilePlan(string remotePath, string localPath, long totalBytes)
+            {
+                RemotePath = remotePath;
+                LocalPath = localPath;
+                TotalBytes = Math.Max(0, totalBytes);
             }
         }
 
@@ -356,7 +372,7 @@ namespace AgentControl
                     ListViewItem item = new ListViewItem(string.IsNullOrWhiteSpace(file.Name) ? Path.GetFileName(file.FullPath) : file.Name)
                     {
                         ImageIndex = icon,
-                        Tag = new RemoteFileItemTag(agentId, file.FullPath, false)
+                        Tag = new RemoteFileItemTag(agentId, file.FullPath, false, file.Size)
                     };
                     item.SubItems.Add(file.Size > 0 ? FormatSize(file.Size) : "");
                     item.SubItems.Add(string.IsNullOrWhiteSpace(file.Extension) ? Path.GetExtension(file.FullPath) : file.Extension);
@@ -446,6 +462,8 @@ namespace AgentControl
             dgvDownloads.RowHeadersVisible = false; // Ẩn cột đầu thừa thãi cho gọn
             dgvDownloads.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
             typeof(DataGridView).GetProperty("DoubleBuffered", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.SetValue(dgvDownloads, true, null);
+            dgvDownloads.CellPainting -= dgvDownloads_CellPainting;
+            dgvDownloads.CellPainting += dgvDownloads_CellPainting;
 
             // 1. Cột Mã Tải (Ẩn ngầm làm mồi tương tác)
             dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "DownloadID", HeaderText = "Mã Tải", Visible = false }); // [cite: 7]
@@ -467,12 +485,59 @@ namespace AgentControl
             dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "Speed", HeaderText = "Tốc Độ", Width = 100 }); // [cite: 11]
 
             // 6. Cột Trạng Thái
-            dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Trạng Thái", Width = 140 }); // [cite: 13, 14]
+            dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Trạng Thái", Width = 230 }); // [cite: 13, 14]
         }
+        private void dgvDownloads_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
+        {
+            if (e.RowIndex < 0 ||
+                e.ColumnIndex < 0 ||
+                dgvDownloads.Columns[e.ColumnIndex].Name != "Status")
+            {
+                return;
+            }
+
+            string text = e.Value?.ToString() ?? string.Empty;
+            bool isMatched = text.Contains("Checksum: MATCHED", StringComparison.OrdinalIgnoreCase);
+            bool isFailed = text.Contains("Checksum: FAIL", StringComparison.OrdinalIgnoreCase);
+            if (!isMatched && !isFailed)
+            {
+                return;
+            }
+
+            e.Paint(e.CellBounds, DataGridViewPaintParts.Background | DataGridViewPaintParts.Border | DataGridViewPaintParts.SelectionBackground);
+
+            _downloadStatusBoldFont ??= new Font(dgvDownloads.Font, FontStyle.Bold);
+            Font drawFont = _downloadStatusBoldFont;
+            Rectangle bounds = e.CellBounds;
+            int x = bounds.Left + 6;
+            int y = bounds.Top + Math.Max(0, (bounds.Height - TextRenderer.MeasureText(text, drawFont).Height) / 2);
+
+            string marker = isMatched ? "[✓] " : "[✖] ";
+            string result = isMatched ? "MATCHED" : "FAIL";
+            int resultIndex = text.LastIndexOf(result, StringComparison.OrdinalIgnoreCase);
+            string label = resultIndex > marker.Length ? text.Substring(marker.Length, resultIndex - marker.Length) : text.Substring(marker.Length);
+
+            DrawStatusSegment(e.Graphics, marker, drawFont, isMatched ? Color.FromArgb(25, 135, 84) : Color.FromArgb(220, 53, 69), ref x, y);
+            DrawStatusSegment(e.Graphics, label, drawFont, Color.FromArgb(111, 66, 193), ref x, y);
+            DrawStatusSegment(e.Graphics, result, drawFont, isMatched ? Color.FromArgb(13, 110, 253) : Color.FromArgb(220, 53, 69), ref x, y);
+
+            e.Handled = true;
+        }
+
+        private static void DrawStatusSegment(Graphics graphics, string text, Font font, Color color, ref int x, int y)
+        {
+            TextRenderer.DrawText(graphics, text, font, new Point(x, y), color, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+            x += TextRenderer.MeasureText(text, font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Width;
+        }
+
         private async void Form1_Load(object sender, EventArgs e)
         {
             InitDownloadGrid();
- // Kích hoạt Timer bắt đầu đập chu kỳ 500ms một lần để quét DB lên UI
+            if (!radmd5.Checked && !radsha256.Checked && !radnone.Checked)
+            {
+                radnone.Checked = true;
+            }
+            // Kích hoạt Timer bắt đầu đập chu kỳ 500ms một lần để quét DB lên UI
             tmrUpdateUI.Start();
             //ListboxAgents.AddAgent("PC-NHF-01", "Administrator", "192.168.1.15", "Windows 11", "adsadsads", true);
             ListboxAgents.ItemHeight = 123;
@@ -608,6 +673,91 @@ namespace AgentControl
                    (ex is IOException && ex.InnerException is SocketException);
         }
 
+        private string GetSelectedChecksumAlgorithm()
+        {
+            if (radmd5.Checked)
+            {
+                return "MD5";
+            }
+
+            if (radsha256.Checked)
+            {
+                return "SHA256";
+            }
+
+            return "None";
+        }
+
+        private static bool IsChecksumEnabled(string? algorithm)
+        {
+            return string.Equals(algorithm, "MD5", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(algorithm, "SHA256", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(algorithm, "SHA-256", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string NormalizeChecksumAlgorithm(string? algorithm)
+        {
+            if (string.Equals(algorithm, "MD5", StringComparison.OrdinalIgnoreCase))
+            {
+                return "MD5";
+            }
+
+            if (string.Equals(algorithm, "SHA256", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(algorithm, "SHA-256", StringComparison.OrdinalIgnoreCase))
+            {
+                return "SHA256";
+            }
+
+            return "None";
+        }
+
+        private static System.Security.Cryptography.HashAlgorithm CreateHashAlgorithm(string algorithm)
+        {
+            return string.Equals(algorithm, "MD5", StringComparison.OrdinalIgnoreCase)
+                ? System.Security.Cryptography.MD5.Create()
+                : System.Security.Cryptography.SHA256.Create();
+        }
+
+        private static async Task<string> ComputeFileChecksumAsync(string filePath, string algorithm)
+        {
+            algorithm = NormalizeChecksumAlgorithm(algorithm);
+            if (!IsChecksumEnabled(algorithm))
+            {
+                return string.Empty;
+            }
+
+            const int checksumBufferSize = 1024 * 1024;
+            await using FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, checksumBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            using System.Security.Cryptography.HashAlgorithm hash = CreateHashAlgorithm(algorithm);
+            byte[] result = await hash.ComputeHashAsync(fs);
+            return Convert.ToHexString(result);
+        }
+
+        private async Task CompleteDownloadAfterLastChunkAsync(FileChunkPacket chunk, string localPath, long currentDownloaded)
+        {
+            string algorithm = NormalizeChecksumAlgorithm(chunk.ChecksumAlgorithm);
+            if (!IsChecksumEnabled(algorithm))
+            {
+                await SQLiteHelper.UpdateDownloadProgressAsync(chunk.DownloadID, currentDownloaded, chunk.TotalBytes, "Completed");
+                return;
+            }
+
+            await SQLiteHelper.UpdateDownloadProgressAsync(chunk.DownloadID, currentDownloaded, chunk.TotalBytes, "Verifying");
+
+            if (string.IsNullOrWhiteSpace(chunk.SourceChecksum) || !File.Exists(localPath))
+            {
+                await SQLiteHelper.UpdateDownloadProgressAsync(chunk.DownloadID, currentDownloaded, chunk.TotalBytes, "ChecksumFailed");
+                return;
+            }
+
+            string localChecksum = await ComputeFileChecksumAsync(localPath, algorithm);
+            string finalStatus = string.Equals(localChecksum, chunk.SourceChecksum, StringComparison.OrdinalIgnoreCase)
+                ? "ChecksumMatched"
+                : "ChecksumFailed";
+
+            await SQLiteHelper.UpdateDownloadProgressAsync(chunk.DownloadID, currentDownloaded, chunk.TotalBytes, finalStatus);
+        }
+
         private async Task HandleBinaryDownloadChunkAsync(NetworkStream stream, int frameSize)
         {
             FileChunkPacket? chunk = null;
@@ -658,7 +808,7 @@ namespace AgentControl
                 }
 
                 long currentDownloaded = chunk.Offset + bodySize;
-                string status = chunk.IsLastChunk ? "Completed" : "Downloading";
+                string status = chunk.IsLastChunk && IsChecksumEnabled(chunk.ChecksumAlgorithm) ? "Verifying" : (chunk.IsLastChunk ? "Completed" : "Downloading");
 
                 DateTime now = DateTime.Now;
                 bool shouldUpdateDb =
@@ -679,6 +829,7 @@ namespace AgentControl
 
                 if (chunk.IsLastChunk)
                 {
+                    await CompleteDownloadAfterLastChunkAsync(chunk, localPath, currentDownloaded);
                     _downloadDbUpdateTracker.TryRemove(chunk.DownloadID, out _);
                 }
             }
@@ -858,6 +1009,7 @@ namespace AgentControl
                                                 {
                                                     DownloadID = job.DownloadID,
                                                     RemotePath = job.RemotePath,
+                                                    ChecksumAlgorithm = NormalizeChecksumAlgorithm(job.ChecksumAlgorithm),
                                                     Offset = job.DownloadedBytes // Sửa thành DownloadedBytes là hết gạch đỏ!
                                                 };
 
@@ -946,7 +1098,7 @@ namespace AgentControl
                                                 }
 
                                                 long currentDownloaded = chunk.Offset + realBytes.Length;
-                                                string status = chunk.IsLastChunk ? "Completed" : "Downloading";
+                                                string status = chunk.IsLastChunk && IsChecksumEnabled(chunk.ChecksumAlgorithm) ? "Verifying" : (chunk.IsLastChunk ? "Completed" : "Downloading");
 
                                                 DateTime now = DateTime.Now;
                                                 bool shouldUpdateDb =
@@ -969,6 +1121,7 @@ namespace AgentControl
 
                                                 if (chunk.IsLastChunk)
                                                 {
+                                                    await CompleteDownloadAfterLastChunkAsync(chunk, localPath, currentDownloaded);
                                                     _downloadDbUpdateTracker.TryRemove(chunk.DownloadID, out _);
                                                 }
                                             }
@@ -1320,13 +1473,54 @@ namespace AgentControl
             return $"{convertFormatSize(bytesPerSecond)}/s";
         }
 
-        private bool ApplyDownloadRowStyle(DataGridViewRow row, string status)
+        private static bool IsChecksumMatchedStatus(string status)
+        {
+            return status.Equals("ChecksumMatched", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsChecksumFailedStatus(string status)
+        {
+            return status.Equals("ChecksumFailed", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsDownloadTerminalStatus(string status)
+        {
+            return status.Equals("Completed", StringComparison.OrdinalIgnoreCase) ||
+                   status.Equals("Error", StringComparison.OrdinalIgnoreCase) ||
+                   IsChecksumMatchedStatus(status) ||
+                   IsChecksumFailedStatus(status);
+        }
+
+        private static string GetChecksumDisplayAlgorithm(string algorithm)
+        {
+            return string.Equals(NormalizeChecksumAlgorithm(algorithm), "SHA256", StringComparison.OrdinalIgnoreCase)
+                ? "SHA-256"
+                : "MD5";
+        }
+
+        private static string GetChecksumDisplayStatus(string status, string algorithm)
+        {
+            string displayAlgorithm = GetChecksumDisplayAlgorithm(algorithm);
+            if (IsChecksumMatchedStatus(status))
+            {
+                return $"[✓] {displayAlgorithm} Checksum: MATCHED";
+            }
+
+            if (IsChecksumFailedStatus(status))
+            {
+                return $"[✖] {displayAlgorithm} Checksum: FAIL";
+            }
+
+            return status;
+        }
+
+        private bool ApplyDownloadRowStyle(DataGridViewRow row, string status, string checksumAlgorithm)
         {
             bool changed = false;
             DataGridViewCell statusCell = row.Cells["Status"];
             statusCell.Style.Font = null;
             statusCell.Style.ForeColor = dgvDownloads.DefaultCellStyle.ForeColor;
-            changed |= SetCellValueIfChanged(statusCell, status);
+            changed |= SetCellValueIfChanged(statusCell, GetChecksumDisplayStatus(status, checksumAlgorithm));
 
             if (status.Equals("Error", StringComparison.OrdinalIgnoreCase))
             {
@@ -1339,8 +1533,16 @@ namespace AgentControl
             else if (status.Equals("Completed", StringComparison.OrdinalIgnoreCase))
             {
                 changed |= SetCellValueIfChanged(row.Cells["Progress"], 100);
-                changed |= SetCellValueIfChanged(statusCell, "✓ Complete");
+                changed |= SetCellValueIfChanged(statusCell, "Done");
                 statusCell.Style.ForeColor = Color.FromArgb(25, 135, 84);
+                _downloadStatusBoldFont ??= new Font(dgvDownloads.Font, FontStyle.Bold);
+                statusCell.Style.Font = _downloadStatusBoldFont;
+            }
+            else if (IsChecksumMatchedStatus(status) || IsChecksumFailedStatus(status))
+            {
+                changed |= SetCellValueIfChanged(row.Cells["Progress"], 100);
+                changed |= SetCellValueIfChanged(statusCell, GetChecksumDisplayStatus(status, checksumAlgorithm));
+                statusCell.Style.ForeColor = IsChecksumFailedStatus(status) ? Color.FromArgb(220, 53, 69) : dgvDownloads.DefaultCellStyle.ForeColor;
                 _downloadStatusBoldFont ??= new Font(dgvDownloads.Font, FontStyle.Bold);
                 statusCell.Style.Font = _downloadStatusBoldFont;
             }
@@ -1369,7 +1571,7 @@ namespace AgentControl
             return item.SubItems.Count > 1 && item.SubItems[1].Text.Equals("Folder", StringComparison.OrdinalIgnoreCase);
         }
 
-        private void AddFolderFilesToDownloadList(string remoteFolderPath, string localFolderPath, List<(string RemotePath, string LocalPath)> files)
+        private void AddFolderFilesToDownloadList(string remoteFolderPath, string localFolderPath, List<DownloadFilePlan> files)
         {
             try
             {
@@ -1381,7 +1583,9 @@ namespace AgentControl
             {
                 foreach (string filePath in Directory.GetFiles(remoteFolderPath))
                 {
-                    files.Add((filePath, Path.Combine(localFolderPath, Path.GetFileName(filePath))));
+                    long totalBytes = 0;
+                    try { totalBytes = new FileInfo(filePath).Length; } catch { }
+                    files.Add(new DownloadFilePlan(filePath, Path.Combine(localFolderPath, Path.GetFileName(filePath)), totalBytes));
                 }
             }
             catch { }
@@ -1682,6 +1886,64 @@ namespace AgentControl
             }
         }
 
+        private async Task<string> AddDownloadJobToQueueAsync(string agentId, string remoteFilePath, string localFilePath, long totalBytes, string checksumAlgorithm)
+        {
+            string fileName = Path.GetFileName(remoteFilePath);
+            string downloadId = Guid.NewGuid().ToString();
+
+            await SQLiteHelper.AddToDownloadQueueAsync(downloadId, agentId, remoteFilePath, localFilePath, totalBytes, checksumAlgorithm);
+            _downloadLocalPathCache[downloadId] = localFilePath;
+            await SQLiteHelper.SaveLogAsync("Download", $"Báº¯t Ä‘áº§u táº¡o phiÃªn táº£i file: {fileName} | ID: {downloadId}");
+            return downloadId;
+        }
+
+        private async Task SendDownloadRequestAsync(string agentId, string downloadId, string remoteFilePath, string checksumAlgorithm)
+        {
+            string fileName = Path.GetFileName(remoteFilePath);
+            long offset = await SQLiteHelper.GetDownloadedBytesOffsetAsync(downloadId);
+
+            var downloadRequest = new DownloadRequestModel
+            {
+                DownloadID = downloadId,
+                RemotePath = remoteFilePath,
+                Offset = offset,
+                ChecksumAlgorithm = NormalizeChecksumAlgorithm(checksumAlgorithm)
+            };
+
+            SocketPacket requestPacket = new SocketPacket
+            {
+                Type = "REQUEST_DOWNLOAD",
+                AgentID = agentId,
+                Data = JsonSerializer.Serialize(downloadRequest)
+            };
+
+            if (_connectedAgents != null && _connectedAgents.TryGetValue(agentId, out var agentInfo))
+            {
+                TcpClient client = agentInfo.Client;
+                if (client != null && client.Connected)
+                {
+                    try
+                    {
+                        await SendPacketToAgentAsync(agentId, client, requestPacket);
+                        await SQLiteHelper.UpdateDownloadProgressAsync(downloadId, offset, "Downloading");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Lá»—i báº¯n gÃ³i tin táº£i file {fileName}: {ex.Message}");
+                        await SQLiteHelper.UpdateDownloadProgressAsync(downloadId, offset, "Error");
+                    }
+                }
+                else
+                {
+                    await SQLiteHelper.UpdateDownloadProgressAsync(downloadId, offset, "Waiting Agent");
+                }
+            }
+            else
+            {
+                await SQLiteHelper.UpdateDownloadProgressAsync(downloadId, offset, "Waiting Agent");
+            }
+        }
+
         private async Task<string> AddDownloadJobAndSendRequestAsync(string agentId, string remoteFilePath, string localFilePath)
         {
             string fileName = Path.GetFileName(remoteFilePath);
@@ -1769,7 +2031,7 @@ namespace AgentControl
                 if (fbd.ShowDialog() != DialogResult.OK) return;
 
                 string localTargetFolder = fbd.SelectedPath;
-                var filesToDownload = new List<(string RemotePath, string LocalPath)>();
+                var filesToDownload = new List<DownloadFilePlan>();
                 int skippedFolders = 0;
                 var folderErrors = new List<string>();
 
@@ -1804,13 +2066,13 @@ namespace AgentControl
                                 string safeRelativePath = folderFile.RelativePath
                                     .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
                                     .TrimStart(Path.DirectorySeparatorChar);
-                                filesToDownload.Add((folderFile.RemotePath, Path.Combine(localFolderRoot, safeRelativePath)));
+                                filesToDownload.Add(new DownloadFilePlan(folderFile.RemotePath, Path.Combine(localFolderRoot, safeRelativePath), folderFile.Size));
                             }
                             continue;
                         }
 
                         string remoteOnlyFileName = Path.GetFileName(remoteItem.FullPath);
-                        filesToDownload.Add((remoteItem.FullPath, Path.Combine(localTargetFolder, remoteOnlyFileName)));
+                        filesToDownload.Add(new DownloadFilePlan(remoteItem.FullPath, Path.Combine(localTargetFolder, remoteOnlyFileName), remoteItem.Size));
                         continue;
                     }
 
@@ -1824,7 +2086,9 @@ namespace AgentControl
                     }
                     else
                     {
-                        filesToDownload.Add((remoteFilePath, localFilePath));
+                        long totalBytes = 0;
+                        try { totalBytes = new FileInfo(remoteFilePath).Length; } catch { }
+                        filesToDownload.Add(new DownloadFilePlan(remoteFilePath, localFilePath, totalBytes));
                     }
                 }
 
@@ -1834,7 +2098,10 @@ namespace AgentControl
                     return;
                 }
 
+                string checksumAlgorithm = GetSelectedChecksumAlgorithm();
                 var batchIds = new HashSet<string>();
+                var queuedJobs = new List<(string DownloadID, DownloadFilePlan File)>();
+                int queuedCount = 0;
                 foreach (var file in filesToDownload)
                 {
                     string? localFolder = Path.GetDirectoryName(file.LocalPath);
@@ -1843,9 +2110,19 @@ namespace AgentControl
                         Directory.CreateDirectory(localFolder);
                     }
 
-                    string downloadId = await AddDownloadJobAndSendRequestAsync(copyAgentId, file.RemotePath, file.LocalPath);
+                    string downloadId = await AddDownloadJobToQueueAsync(copyAgentId, file.RemotePath, file.LocalPath, file.TotalBytes, checksumAlgorithm);
                     batchIds.Add(downloadId);
+                    queuedJobs.Add((downloadId, file));
+                    queuedCount++;
+
+                    if (queuedCount % 25 == 0)
+                    {
+                        tmrUpdateUI_Tick(this, EventArgs.Empty);
+                        await Task.Yield();
+                    }
                 }
+
+                tmrUpdateUI_Tick(this, EventArgs.Empty);
 
                 _activeDownloadBatchIds = batchIds;
                 _activeDownloadBatchNotified = false;
@@ -1861,6 +2138,11 @@ namespace AgentControl
                 }
 
                 MessageBox.Show($"Đã thêm thành công {filesToDownload.Count} file vào hàng đợi tải xuống.", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                foreach (var queuedJob in queuedJobs)
+                {
+                    await SendDownloadRequestAsync(copyAgentId, queuedJob.DownloadID, queuedJob.File.RemotePath, checksumAlgorithm);
+                }
             }
         }
 
@@ -1962,7 +2244,7 @@ namespace AgentControl
                         if (progressPercent > 100) progressPercent = 100;
                     }
 
-                    if (job.Status == "Completed" || (job.TotalBytes > 0 && job.DownloadedBytes >= job.TotalBytes))
+                    if (IsDownloadTerminalStatus(job.Status))
                     {
                         progressPercent = 100;
                     }
@@ -2000,7 +2282,7 @@ namespace AgentControl
                         rowChanged |= SetCellValueIfChanged(existingRow.Cells["TotalSize"], totalSizeStr);
                         rowChanged |= SetCellValueIfChanged(existingRow.Cells["Progress"], progressPercent);
                         rowChanged |= SetCellValueIfChanged(existingRow.Cells["Speed"], speedStr);
-                        rowChanged |= ApplyDownloadRowStyle(existingRow, job.Status);
+                        rowChanged |= ApplyDownloadRowStyle(existingRow, job.Status, job.ChecksumAlgorithm);
                         if (rowChanged)
                         {
                             dgvDownloads.InvalidateRow(existingRow.Index);
@@ -2017,7 +2299,7 @@ namespace AgentControl
                         newRow.Cells["TotalSize"].Value = totalSizeStr;
                         newRow.Cells["Progress"].Value = progressPercent;
                         newRow.Cells["Speed"].Value = speedStr;
-                        ApplyDownloadRowStyle(newRow, job.Status);
+                        ApplyDownloadRowStyle(newRow, job.Status, job.ChecksumAlgorithm);
                         rowMap[job.DownloadID] = newRow;
                     }
                 }
@@ -2055,11 +2337,11 @@ namespace AgentControl
                         }
 
                         matchedCount++;
-                        if (job.Status == "Completed")
+                        if (job.Status == "Completed" || IsChecksumMatchedStatus(job.Status))
                         {
                             completedCount++;
                         }
-                        else if (job.Status == "Error")
+                        else if (job.Status == "Error" || IsChecksumFailedStatus(job.Status))
                         {
                             errorCount++;
                         }

@@ -53,6 +53,8 @@ namespace AgentShared
         public int ChunkSize { get; set; }                      // Độ dài thực của mảng byte đợt này
         public bool IsLastChunk { get; set; }                   // Đánh dấu đây có phải khúc cuối cùng chưa
         public string Base64Data { get; set; } = string.Empty;  // Dữ liệu nhị phân băm nhỏ đã chuyển sang chuỗi Base64
+        public string ChecksumAlgorithm { get; set; } = "None";
+        public string SourceChecksum { get; set; } = string.Empty;
     }
 
     public class DownloadErrorPacket

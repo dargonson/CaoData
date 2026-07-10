@@ -6,4 +6,5 @@
     public long TotalBytes { get; set; }        // 🌟 Đảm bảo có trường này
     public long DownloadedBytes { get; set; }   // 🌟 Đảm bảo có trường này
     public string Status { get; set; }
+    public string ChecksumAlgorithm { get; set; } = "None";
 }

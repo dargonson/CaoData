@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -455,6 +456,51 @@ namespace AgentService
         }
 
         // Tính năng số 1: Gửi thông tin máy cho Server
+        private static bool IsChecksumEnabled(string? algorithm)
+        {
+            return string.Equals(algorithm, "MD5", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(algorithm, "SHA256", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(algorithm, "SHA-256", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string NormalizeChecksumAlgorithm(string? algorithm)
+        {
+            if (string.Equals(algorithm, "MD5", StringComparison.OrdinalIgnoreCase))
+            {
+                return "MD5";
+            }
+
+            if (string.Equals(algorithm, "SHA256", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(algorithm, "SHA-256", StringComparison.OrdinalIgnoreCase))
+            {
+                return "SHA256";
+            }
+
+            return "None";
+        }
+
+        private static HashAlgorithm CreateHashAlgorithm(string algorithm)
+        {
+            return string.Equals(algorithm, "MD5", StringComparison.OrdinalIgnoreCase)
+                ? MD5.Create()
+                : SHA256.Create();
+        }
+
+        private static async Task<string> ComputeFileChecksumAsync(string filePath, string algorithm, CancellationToken token)
+        {
+            algorithm = NormalizeChecksumAlgorithm(algorithm);
+            if (!IsChecksumEnabled(algorithm))
+            {
+                return string.Empty;
+            }
+
+            const int checksumBufferSize = 1024 * 1024;
+            await using FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, checksumBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            using HashAlgorithm hash = CreateHashAlgorithm(algorithm);
+            byte[] result = await hash.ComputeHashAsync(fs, token);
+            return Convert.ToHexString(result);
+        }
+
         private async Task SendRemoteFolderFilesAsync(string agentId, string requestData)
         {
             RemoteFolderFilesRequest? request = null;
@@ -802,6 +848,10 @@ namespace AgentService
 
                                         FileInfo fileInfo = new FileInfo(filePath);
                                         totalBytes = fileInfo.Length;
+                                        string checksumAlgorithm = NormalizeChecksumAlgorithm(request.ChecksumAlgorithm);
+                                        string sourceChecksum = IsChecksumEnabled(checksumAlgorithm)
+                                            ? await ComputeFileChecksumAsync(filePath, checksumAlgorithm, token)
+                                            : string.Empty;
 
                                         if (totalBytes == 0)
                                         {
@@ -813,7 +863,9 @@ namespace AgentService
                                                 Offset = 0,
                                                 ChunkSize = 0,
                                                 IsLastChunk = true,
-                                                Base64Data = string.Empty
+                                                Base64Data = string.Empty,
+                                                ChecksumAlgorithm = checksumAlgorithm,
+                                                SourceChecksum = sourceChecksum
                                             };
 
                                             await SendDownloadChunkAsync(emptyChunk, Array.Empty<byte>(), 0, token);
@@ -821,6 +873,25 @@ namespace AgentService
                                         }
 
                                         // Định nghĩa kích thước mỗi khối băm nhỏ (Buffer Size = 256KB tăng tốc độ truyền tải)
+                                        if (currentOffset >= totalBytes)
+                                        {
+                                            var completedChunk = new FileChunkPacket
+                                            {
+                                                DownloadID = request.DownloadID,
+                                                RemotePath = filePath,
+                                                TotalBytes = totalBytes,
+                                                Offset = totalBytes,
+                                                ChunkSize = 0,
+                                                IsLastChunk = true,
+                                                Base64Data = string.Empty,
+                                                ChecksumAlgorithm = checksumAlgorithm,
+                                                SourceChecksum = sourceChecksum
+                                            };
+
+                                            await SendDownloadChunkAsync(completedChunk, Array.Empty<byte>(), 0, token);
+                                            return;
+                                        }
+
                                         int bufferSize = 1024 * 1024;
                                         byte[] buffer = new byte[bufferSize];
 
@@ -844,10 +915,16 @@ namespace AgentService
                                                     Offset = currentOffset,
                                                     ChunkSize = bytesRead,
                                                     IsLastChunk = (currentOffset + bytesRead >= totalBytes), // Đánh dấu nếu là mảnh cuối [cite: 15]
-                                                    Base64Data = string.Empty
+                                                    Base64Data = string.Empty,
+                                                    ChecksumAlgorithm = checksumAlgorithm
                                                 };
 
                                                 // Gói vào SocketPacket chung để bắn lên mạng
+                                                if (chunk.IsLastChunk)
+                                                {
+                                                    chunk.SourceChecksum = sourceChecksum;
+                                                }
+
                                                 await SendDownloadChunkAsync(chunk, buffer, bytesRead, token);
 
                                                 // Cập nhật lại vị trí dịch chuyển tiếp theo [cite: 6]
