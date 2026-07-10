@@ -1,10 +1,51 @@
-## Visual Studio các file rác tự sinh
+# Build outputs
+bin/
+obj/
+[Bb]in/
+[Oo]bj/
+
+# Visual Studio
 .vs/
 *.user
 *.suo
 *.userosscache
 *.sln.docstates
 
-## Thư mục Build xuất bản code
-bin/
-obj/
+# Rider / VS Code
+.idea/
+.vscode/
+
+# NuGet
+*.nupkg
+packages/
+.nuget/
+
+# Debug / logs
+*.log
+*.tmp
+*.cache
+
+# SQLite local database
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# Test / coverage
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+# Publish output
+publish/
+*.pubxml.user
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Codex / local scratch
+.codex-build/
