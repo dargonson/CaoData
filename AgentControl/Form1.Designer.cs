@@ -76,7 +76,7 @@
             grbchecksum.Controls.Add(radnone);
             grbchecksum.Controls.Add(radmd5);
             grbchecksum.Controls.Add(radsha256);
-            grbchecksum.Location = new Point(699, 3);
+            grbchecksum.Location = new Point(12, 3);
             grbchecksum.Name = "grbchecksum";
             grbchecksum.Size = new Size(288, 48);
             grbchecksum.TabIndex = 4;
@@ -118,7 +118,7 @@
             // 
             // btncleardrv
             // 
-            btncleardrv.Location = new Point(1434, 12);
+            btncleardrv.Location = new Point(746, 12);
             btncleardrv.Name = "btncleardrv";
             btncleardrv.Size = new Size(112, 42);
             btncleardrv.TabIndex = 3;
@@ -128,7 +128,7 @@
             // 
             // btnKetNoi
             // 
-            btnKetNoi.Location = new Point(1016, 12);
+            btnKetNoi.Location = new Point(312, 12);
             btnKetNoi.Name = "btnKetNoi";
             btnKetNoi.Size = new Size(126, 42);
             btnKetNoi.TabIndex = 2;
@@ -138,7 +138,7 @@
             // 
             // btnCopy
             // 
-            btnCopy.Location = new Point(1148, 12);
+            btnCopy.Location = new Point(444, 12);
             btnCopy.Name = "btnCopy";
             btnCopy.Size = new Size(124, 42);
             btnCopy.TabIndex = 1;
@@ -148,9 +148,9 @@
             // 
             // brndel
             // 
-            brndel.Location = new Point(1278, 12);
+            brndel.Location = new Point(574, 12);
             brndel.Name = "brndel";
-            brndel.Size = new Size(150, 42);
+            brndel.Size = new Size(139, 42);
             brndel.TabIndex = 0;
             brndel.Text = "Xoá";
             brndel.UseVisualStyleBackColor = true;

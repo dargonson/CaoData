@@ -414,6 +414,28 @@ namespace AgentControl
             }
         }
 
+        public static async Task<string> GetChecksumAlgorithmByDownloadIdAsync(string downloadId)
+        {
+            await DbLock.WaitAsync();
+            try
+            {
+                using (var connection = await OpenConnectionAsync())
+                {
+                    string selectQuery = "SELECT ChecksumAlgorithm FROM DownloadQueue WHERE DownloadID = @DownloadID;";
+                    using (var cmd = new SQLiteCommand(selectQuery, connection))
+                    {
+                        cmd.Parameters.AddWithValue("@DownloadID", downloadId);
+                        var result = await cmd.ExecuteScalarAsync();
+                        return result != null ? result.ToString() ?? "None" : "None";
+                    }
+                }
+            }
+            finally
+            {
+                DbLock.Release();
+            }
+        }
+
         public static async Task DeleteDownloadsAsync(IEnumerable<string> downloadIds)
         {
             var ids = downloadIds

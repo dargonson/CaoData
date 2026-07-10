@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
@@ -557,6 +558,127 @@ namespace AgentService
             });
         }
 
+        private async Task SendRemoteFileActionResponseAsync(string agentId, RemoteFileActionResponse response)
+        {
+            await SendPacketAsync(new SocketPacket
+            {
+                Type = "REMOTE_FILE_ACTION_RESPONSE",
+                AgentID = agentId,
+                Data = JsonSerializer.Serialize(response)
+            });
+        }
+
+        private async Task HandleRemoteDeleteAsync(string agentId, string requestData)
+        {
+            RemoteDeleteRequest? request = null;
+            var response = new RemoteFileActionResponse();
+
+            try
+            {
+                request = JsonSerializer.Deserialize<RemoteDeleteRequest>(requestData);
+                response.RequestID = request?.RequestID ?? string.Empty;
+
+                if (request == null || request.Items.Count == 0)
+                {
+                    response.Errors.Add("Khong co muc nao de xoa.");
+                }
+                else
+                {
+                    foreach (RemoteFileActionItem item in request.Items)
+                    {
+                        string path = item.FullPath;
+                        try
+                        {
+                            if (item.IsFolder || Directory.Exists(path))
+                            {
+                                if (!Directory.Exists(path))
+                                {
+                                    response.Errors.Add($"{path}: Thu muc khong ton tai.");
+                                    continue;
+                                }
+
+                                Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(
+                                    path,
+                                    Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                                    Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                            }
+                            else
+                            {
+                                if (!File.Exists(path))
+                                {
+                                    response.Errors.Add($"{path}: File khong ton tai.");
+                                    continue;
+                                }
+
+                                Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
+                                    path,
+                                    Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                                    Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                            }
+
+                            response.Paths.Add(path);
+                        }
+                        catch (Exception ex)
+                        {
+                            response.Errors.Add($"{path}: {ex.Message}");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                response.RequestID = request?.RequestID ?? string.Empty;
+                response.Errors.Add(ex.Message);
+            }
+
+            response.Success = response.Errors.Count == 0;
+            response.Message = response.Success
+                ? $"Da xoa {response.Paths.Count} muc tren Agent."
+                : $"Da xoa {response.Paths.Count} muc, loi {response.Errors.Count} muc.";
+
+            await SendRemoteFileActionResponseAsync(agentId, response);
+        }
+
+        private async Task HandleRemoteOpenAsync(string agentId, string requestData)
+        {
+            RemoteOpenRequest? request = null;
+            var response = new RemoteFileActionResponse();
+
+            try
+            {
+                request = JsonSerializer.Deserialize<RemoteOpenRequest>(requestData);
+                response.RequestID = request?.RequestID ?? string.Empty;
+
+                string path = request?.FullPath ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    response.Errors.Add("Duong dan file rong.");
+                }
+                else if (!File.Exists(path) && !Directory.Exists(path))
+                {
+                    response.Errors.Add($"{path}: File/folder khong ton tai.");
+                }
+                else
+                {
+                    Process.Start(new ProcessStartInfo(path)
+                    {
+                        UseShellExecute = true
+                    });
+
+                    response.Paths.Add(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                response.RequestID = request?.RequestID ?? string.Empty;
+                response.Errors.Add(ex.Message);
+            }
+
+            response.Success = response.Errors.Count == 0;
+            response.Message = response.Success ? "Da gui lenh mo file/folder tren Agent." : "Khong the mo file/folder tren Agent.";
+            await SendRemoteFileActionResponseAsync(agentId, response);
+        }
+
         private IEnumerable<string> EnumerateFilesSafe(string rootPath, List<string> errors)
         {
             IEnumerable<string> files = Array.Empty<string>();
@@ -957,6 +1079,24 @@ namespace AgentService
                             _ = Task.Run(async () =>
                             {
                                 await SendRemoteFolderFilesAsync(packet.AgentID, requestData);
+                            });
+                        }
+
+                        if (packet.Type == "DELETE_REMOTE_ITEMS")
+                        {
+                            string requestData = packet.Data;
+                            _ = Task.Run(async () =>
+                            {
+                                await HandleRemoteDeleteAsync(packet.AgentID, requestData);
+                            });
+                        }
+
+                        if (packet.Type == "OPEN_REMOTE_FILE")
+                        {
+                            string requestData = packet.Data;
+                            _ = Task.Run(async () =>
+                            {
+                                await HandleRemoteOpenAsync(packet.AgentID, requestData);
                             });
                         }
 

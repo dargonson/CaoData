@@ -24,6 +24,7 @@ namespace AgentControl
         private ConcurrentDictionary<string, SemaphoreSlim> _agentSendLocks = new ConcurrentDictionary<string, SemaphoreSlim>();
         private ConcurrentDictionary<string, string> _pendingDirectoryRequests = new ConcurrentDictionary<string, string>();
         private ConcurrentDictionary<string, TaskCompletionSource<RemoteFolderFilesResponse>> _pendingFolderFileRequests = new ConcurrentDictionary<string, TaskCompletionSource<RemoteFolderFilesResponse>>();
+        private ConcurrentDictionary<string, TaskCompletionSource<RemoteFileActionResponse>> _pendingRemoteActionRequests = new ConcurrentDictionary<string, TaskCompletionSource<RemoteFileActionResponse>>();
         private HashSet<string> _activeDownloadBatchIds = new HashSet<string>();
         private bool _activeDownloadBatchNotified = true;
         private bool _isDownloadGridRefreshing = false;
@@ -84,6 +85,63 @@ namespace AgentControl
                 RemotePath = remotePath;
                 LocalPath = localPath;
                 TotalBytes = Math.Max(0, totalBytes);
+            }
+        }
+
+        private sealed class AddQueueProgressDialog : Form
+        {
+            private readonly Label _messageLabel;
+            private readonly ProgressBar _progressBar;
+
+            public AddQueueProgressDialog(int total)
+            {
+                Text = "Đang thêm vào danh sách";
+                FormBorderStyle = FormBorderStyle.FixedDialog;
+                StartPosition = FormStartPosition.CenterParent;
+                MinimizeBox = false;
+                MaximizeBox = false;
+                ControlBox = false;
+                Width = 360;
+                Height = 130;
+
+                _messageLabel = new Label
+                {
+                    AutoSize = false,
+                    Left = 16,
+                    Top = 18,
+                    Width = 310,
+                    Height = 24,
+                    TextAlign = ContentAlignment.MiddleLeft
+                };
+
+                _progressBar = new ProgressBar
+                {
+                    Left = 16,
+                    Top = 54,
+                    Width = 310,
+                    Height = 22,
+                    Minimum = 0,
+                    Maximum = Math.Max(1, total)
+                };
+
+                Controls.Add(_messageLabel);
+                Controls.Add(_progressBar);
+                UpdateProgress(0, total);
+            }
+
+            public void UpdateProgress(int current, int total)
+            {
+                total = Math.Max(1, total);
+                current = Math.Max(0, Math.Min(current, total));
+                if (_progressBar.Maximum != total)
+                {
+                    _progressBar.Maximum = total;
+                }
+
+                _progressBar.Value = current;
+                _messageLabel.Text = $"Đã add {current}/{total} dòng";
+                _messageLabel.Refresh();
+                _progressBar.Refresh();
             }
         }
 
@@ -207,6 +265,8 @@ namespace AgentControl
 
         private async Task<RemoteFolderFilesResponse?> RequestRemoteFolderFilesAsync(string agentId, string remoteRootPath)
         {
+            remoteRootPath = NormalizeRemotePath(remoteRootPath);
+
             if (!_connectedAgents.TryGetValue(agentId, out var agentInfo))
             {
                 return null;
@@ -268,6 +328,66 @@ namespace AgentControl
             if (_pendingFolderFileRequests.TryRemove(response.RequestID, out var completion))
             {
                 completion.TrySetResult(response);
+            }
+        }
+
+        private void CompleteRemoteFileActionRequest(RemoteFileActionResponse response)
+        {
+            if (string.IsNullOrWhiteSpace(response.RequestID))
+            {
+                return;
+            }
+
+            if (_pendingRemoteActionRequests.TryRemove(response.RequestID, out var completion))
+            {
+                completion.TrySetResult(response);
+            }
+        }
+
+        private async Task<RemoteFileActionResponse?> SendRemoteActionRequestAsync(string agentId, string packetType, object request, string requestId)
+        {
+            if (!_connectedAgents.TryGetValue(agentId, out var agentInfo))
+            {
+                return null;
+            }
+
+            TcpClient client = agentInfo.Client;
+            if (client == null || !client.Connected)
+            {
+                return null;
+            }
+
+            var completion = new TaskCompletionSource<RemoteFileActionResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pendingRemoteActionRequests[requestId] = completion;
+
+            try
+            {
+                await SendPacketToAgentAsync(agentId, client, new SocketPacket
+                {
+                    Type = packetType,
+                    AgentID = agentId,
+                    Data = JsonSerializer.Serialize(request)
+                });
+
+                Task finished = await Task.WhenAny(completion.Task, Task.Delay(TimeSpan.FromSeconds(30)));
+                if (finished == completion.Task)
+                {
+                    return await completion.Task;
+                }
+
+                _pendingRemoteActionRequests.TryRemove(requestId, out _);
+                return new RemoteFileActionResponse
+                {
+                    RequestID = requestId,
+                    Success = false,
+                    Message = "Agent khong phan hoi.",
+                    Errors = { "Timeout khi doi Agent phan hoi." }
+                };
+            }
+            catch
+            {
+                _pendingRemoteActionRequests.TryRemove(requestId, out _);
+                throw;
             }
         }
 
@@ -804,10 +924,23 @@ namespace AgentControl
                     bodyCopyStarted = true;
                     await TransferFrameProtocol.CopyExactToAsync(stream, fs, bodySize);
                     bodyCopyCompleted = true;
+                    if (chunk.IsLastChunk && chunk.TotalBytes >= 0)
+                    {
+                        fs.SetLength(chunk.TotalBytes);
+                    }
                     await fs.FlushAsync();
                 }
 
                 long currentDownloaded = chunk.Offset + bodySize;
+                if (chunk.IsLastChunk && !IsChecksumEnabled(chunk.ChecksumAlgorithm))
+                {
+                    string queuedChecksumAlgorithm = await SQLiteHelper.GetChecksumAlgorithmByDownloadIdAsync(chunk.DownloadID);
+                    if (IsChecksumEnabled(queuedChecksumAlgorithm))
+                    {
+                        chunk.ChecksumAlgorithm = NormalizeChecksumAlgorithm(queuedChecksumAlgorithm);
+                    }
+                }
+
                 string status = chunk.IsLastChunk && IsChecksumEnabled(chunk.ChecksumAlgorithm) ? "Verifying" : (chunk.IsLastChunk ? "Completed" : "Downloading");
 
                 DateTime now = DateTime.Now;
@@ -980,6 +1113,17 @@ namespace AgentControl
                                     }
                                 }
                             }
+                            else if (packet.Type == "REMOTE_FILE_ACTION_RESPONSE")
+                            {
+                                if (!string.IsNullOrEmpty(packet.Data))
+                                {
+                                    var response = JsonSerializer.Deserialize<RemoteFileActionResponse>(packet.Data);
+                                    if (response != null)
+                                    {
+                                        CompleteRemoteFileActionRequest(response);
+                                    }
+                                }
+                            }
                             else if (packet.Type == "REGISTER")
                             {
                                 var info = System.Text.Json.JsonSerializer.Deserialize<AgentInfo>(packet.Data);
@@ -1095,9 +1239,22 @@ namespace AgentControl
                                                 {
                                                     fs.Seek(chunk.Offset, SeekOrigin.Begin);
                                                     fs.Write(realBytes, 0, realBytes.Length);
+                                                    if (chunk.IsLastChunk && chunk.TotalBytes >= 0)
+                                                    {
+                                                        fs.SetLength(chunk.TotalBytes);
+                                                    }
                                                 }
 
                                                 long currentDownloaded = chunk.Offset + realBytes.Length;
+                                                if (chunk.IsLastChunk && !IsChecksumEnabled(chunk.ChecksumAlgorithm))
+                                                {
+                                                    string queuedChecksumAlgorithm = await SQLiteHelper.GetChecksumAlgorithmByDownloadIdAsync(chunk.DownloadID);
+                                                    if (IsChecksumEnabled(queuedChecksumAlgorithm))
+                                                    {
+                                                        chunk.ChecksumAlgorithm = NormalizeChecksumAlgorithm(queuedChecksumAlgorithm);
+                                                    }
+                                                }
+
                                                 string status = chunk.IsLastChunk && IsChecksumEnabled(chunk.ChecksumAlgorithm) ? "Verifying" : (chunk.IsLastChunk ? "Completed" : "Downloading");
 
                                                 DateTime now = DateTime.Now;
@@ -1561,6 +1718,48 @@ namespace AgentControl
             return true;
         }
 
+        private void AddOrUpdateQueuedDownloadRow(string downloadId, DownloadFilePlan file, string checksumAlgorithm)
+        {
+            DataGridViewRow? targetRow = null;
+            dgvDownloads.SuspendLayout();
+            foreach (DataGridViewRow row in dgvDownloads.Rows)
+            {
+                string rowDownloadId = row.Cells["DownloadID"].Value?.ToString();
+                if (string.Equals(rowDownloadId, downloadId, StringComparison.OrdinalIgnoreCase))
+                {
+                    targetRow = row;
+                    break;
+                }
+            }
+
+            if (targetRow == null)
+            {
+                int rowIndex = dgvDownloads.Rows.Add();
+                targetRow = dgvDownloads.Rows[rowIndex];
+                targetRow.Cells["DownloadID"].Value = downloadId;
+            }
+
+            targetRow.Cells["FileName"].Value = Path.GetFileName(file.RemotePath);
+            targetRow.Cells["TotalSize"].Value = convertFormatSize(file.TotalBytes);
+            targetRow.Cells["Progress"].Value = 0;
+            targetRow.Cells["Speed"].Value = "0 B/s";
+            ApplyDownloadRowStyle(targetRow, "Waiting", checksumAlgorithm);
+            dgvDownloads.InvalidateRow(targetRow.Index);
+            dgvDownloads.ResumeLayout();
+
+            if (targetRow.Index >= 0)
+            {
+                try
+                {
+                    dgvDownloads.FirstDisplayedScrollingRowIndex = targetRow.Index;
+                }
+                catch { }
+            }
+
+            dgvDownloads.Refresh();
+            dgvDownloads.Update();
+        }
+
         private bool IsFolderItem(ListViewItem item)
         {
             if (item.SubItems.Count > 2 && item.SubItems[2].Text.Equals("File Folder", StringComparison.OrdinalIgnoreCase))
@@ -1569,6 +1768,20 @@ namespace AgentControl
             }
 
             return item.SubItems.Count > 1 && item.SubItems[1].Text.Equals("Folder", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool TryGetRemoteFileItem(ListViewItem item, RemoteNodeTag currentRemoteTag, out RemoteFileItemTag remoteItem)
+        {
+            if (item.Tag is RemoteFileItemTag taggedRemoteItem &&
+                taggedRemoteItem.AgentId.Equals(currentRemoteTag.AgentId, StringComparison.OrdinalIgnoreCase))
+            {
+                remoteItem = taggedRemoteItem;
+                return true;
+            }
+
+            string fallbackRemotePath = Path.Combine(currentRemoteTag.RemotePath, item.Text);
+            remoteItem = new RemoteFileItemTag(currentRemoteTag.AgentId, fallbackRemotePath, IsFolderItem(item));
+            return true;
         }
 
         private void AddFolderFilesToDownloadList(string remoteFolderPath, string localFolderPath, List<DownloadFilePlan> files)
@@ -1601,10 +1814,105 @@ namespace AgentControl
             catch { }
         }
 
-        private void brndel_Click(object sender, EventArgs e)
+        private async void brndel_Click(object sender, EventArgs e)
         {
             if (TryGetRemoteNodeTag(tvRemoteFolders.SelectedNode, out RemoteNodeTag? deleteRemoteTag) && deleteRemoteTag != null)
             {
+                if (deleteRemoteTag.AgentId.Length >= 0)
+                {
+                    if (lvRemoteFiles.CheckedItems.Count == 0)
+                    {
+                        MessageBox.Show("Vui long tick chon it nhat mot muc de xoa!", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+
+                    DialogResult remoteConfirm = MessageBox.Show(
+                        $"Ban co chac chan muon xoa {lvRemoteFiles.CheckedItems.Count} muc da chon tren Agent khong?",
+                        "Xac nhan xoa remote",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Warning);
+
+                    if (remoteConfirm != DialogResult.Yes)
+                    {
+                        return;
+                    }
+
+                    var request = new RemoteDeleteRequest
+                    {
+                        RequestID = Guid.NewGuid().ToString()
+                    };
+
+                    foreach (ListViewItem checkedItem in lvRemoteFiles.CheckedItems)
+                    {
+                        if (TryGetRemoteFileItem(checkedItem, deleteRemoteTag, out RemoteFileItemTag remoteItem))
+                        {
+                            request.Items.Add(new RemoteFileActionItem
+                            {
+                                FullPath = remoteItem.FullPath,
+                                IsFolder = remoteItem.IsFolder
+                            });
+                        }
+                    }
+
+                    if (request.Items.Count == 0)
+                    {
+                        MessageBox.Show("Khong xac dinh duoc muc remote de xoa.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    brndel.Enabled = false;
+                    try
+                    {
+                        RemoteFileActionResponse? response = await SendRemoteActionRequestAsync(deleteRemoteTag.AgentId, "DELETE_REMOTE_ITEMS", request, request.RequestID);
+                        if (response == null)
+                        {
+                            MessageBox.Show("Agent dang offline hoac khong ket noi duoc.", "Loi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            return;
+                        }
+
+                        var deletedPaths = new HashSet<string>(response.Paths, StringComparer.OrdinalIgnoreCase);
+                        for (int i = lvRemoteFiles.Items.Count - 1; i >= 0; i--)
+                        {
+                            ListViewItem item = lvRemoteFiles.Items[i];
+                            if (TryGetRemoteFileItem(item, deleteRemoteTag, out RemoteFileItemTag remoteItem) &&
+                                deletedPaths.Contains(remoteItem.FullPath))
+                            {
+                                lvRemoteFiles.Items.RemoveAt(i);
+                            }
+                        }
+
+                        for (int i = tvRemoteFolders.SelectedNode.Nodes.Count - 1; i >= 0; i--)
+                        {
+                            TreeNode node = tvRemoteFolders.SelectedNode.Nodes[i];
+                            if (node.Tag is RemoteNodeTag nodeTag && deletedPaths.Contains(nodeTag.RemotePath))
+                            {
+                                tvRemoteFolders.SelectedNode.Nodes.RemoveAt(i);
+                            }
+                        }
+
+                        if (response.Success)
+                        {
+                            MessageBox.Show(response.Message, "Thanh cong", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                        else
+                        {
+                            string errorText = response.Errors.Count > 0 ? string.Join(Environment.NewLine, response.Errors.Take(5)) : response.Message;
+                            MessageBox.Show(response.Message + Environment.NewLine + errorText, "Loi xoa remote", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        }
+
+                        _ = RequestRemoteDirectoryAsync(deleteRemoteTag);
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show("Loi khi xoa remote: " + ex.Message, "Loi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                    finally
+                    {
+                        brndel.Enabled = true;
+                    }
+
+                    return;
+                }
                 MessageBox.Show("Chức năng xóa dữ liệu remote chưa được bật cho Agent đang chọn.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
@@ -1697,7 +2005,7 @@ namespace AgentControl
             }
         }
 
-        private void lvRemoteFiles_MouseDoubleClick(object sender, MouseEventArgs e)
+        private async void lvRemoteFiles_MouseDoubleClick(object sender, MouseEventArgs e)
         {
             // Bật cờ hiệu thông báo: "Tôi đang đúp chuột đây, đừng có tự ý tick chọn nha!"
 
@@ -1707,10 +2015,42 @@ namespace AgentControl
             ListViewItem clickedItem = lvRemoteFiles.SelectedItems[0];
             string itemName = clickedItem.Text;
 
+            if (clickedItem.Tag is not RemoteFileItemTag &&
+                TryGetRemoteNodeTag(tvRemoteFolders.SelectedNode, out RemoteNodeTag? activeRemoteTag) &&
+                activeRemoteTag != null &&
+                TryGetRemoteFileItem(clickedItem, activeRemoteTag, out RemoteFileItemTag fallbackRemoteItem))
+            {
+                clickedItem.Tag = fallbackRemoteItem;
+            }
+
             if (clickedItem.Tag is RemoteFileItemTag remoteItem)
             {
                 if (!remoteItem.IsFolder)
                 {
+                    var request = new RemoteOpenRequest
+                    {
+                        RequestID = Guid.NewGuid().ToString(),
+                        FullPath = remoteItem.FullPath
+                    };
+
+                    try
+                    {
+                        RemoteFileActionResponse? response = await SendRemoteActionRequestAsync(remoteItem.AgentId, "OPEN_REMOTE_FILE", request, request.RequestID);
+                        if (response == null)
+                        {
+                            MessageBox.Show("Agent dang offline hoac khong ket noi duoc.", "Loi mo file", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
+                        else if (!response.Success)
+                        {
+                            string errorText = response.Errors.Count > 0 ? string.Join(Environment.NewLine, response.Errors.Take(5)) : response.Message;
+                            MessageBox.Show(errorText, "Loi mo file", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show("Khong the gui lenh mo file: " + ex.Message, "Loi mo file", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+
                     return;
                 }
 
@@ -1946,6 +2286,14 @@ namespace AgentControl
 
         private async Task<string> AddDownloadJobAndSendRequestAsync(string agentId, string remoteFilePath, string localFilePath)
         {
+            string selectedChecksumAlgorithm = GetSelectedChecksumAlgorithm();
+            string queuedDownloadId = await AddDownloadJobToQueueAsync(agentId, remoteFilePath, localFilePath, 0, selectedChecksumAlgorithm);
+            await SendDownloadRequestAsync(agentId, queuedDownloadId, remoteFilePath, selectedChecksumAlgorithm);
+            if (selectedChecksumAlgorithm.Length >= 0)
+            {
+                return queuedDownloadId;
+            }
+
             string fileName = Path.GetFileName(remoteFilePath);
             string downloadId = Guid.NewGuid().ToString();
 
@@ -2039,10 +2387,16 @@ namespace AgentControl
                 {
                     if (isRemoteSelection)
                     {
-                        if (selectedItem.Tag is not RemoteFileItemTag remoteItem ||
-                            !remoteItem.AgentId.Equals(copyAgentId, StringComparison.OrdinalIgnoreCase))
+                        RemoteFileItemTag remoteItem;
+                        if (selectedItem.Tag is RemoteFileItemTag taggedRemoteItem &&
+                            taggedRemoteItem.AgentId.Equals(copyAgentId, StringComparison.OrdinalIgnoreCase))
                         {
-                            continue;
+                            remoteItem = taggedRemoteItem;
+                        }
+                        else
+                        {
+                            string fallbackRemotePath = Path.Combine(currentRemoteTag!.RemotePath, selectedItem.Text);
+                            remoteItem = new RemoteFileItemTag(copyAgentId, fallbackRemotePath, IsFolderItem(selectedItem));
                         }
 
                         if (remoteItem.IsFolder)
@@ -2102,22 +2456,25 @@ namespace AgentControl
                 var batchIds = new HashSet<string>();
                 var queuedJobs = new List<(string DownloadID, DownloadFilePlan File)>();
                 int queuedCount = 0;
-                foreach (var file in filesToDownload)
+                using (var addProgressDialog = new AddQueueProgressDialog(filesToDownload.Count))
                 {
-                    string? localFolder = Path.GetDirectoryName(file.LocalPath);
-                    if (!string.IsNullOrEmpty(localFolder))
+                    addProgressDialog.Show(this);
+                    foreach (var file in filesToDownload)
                     {
-                        Directory.CreateDirectory(localFolder);
-                    }
+                        string? localFolder = Path.GetDirectoryName(file.LocalPath);
+                        if (!string.IsNullOrEmpty(localFolder))
+                        {
+                            Directory.CreateDirectory(localFolder);
+                        }
 
-                    string downloadId = await AddDownloadJobToQueueAsync(copyAgentId, file.RemotePath, file.LocalPath, file.TotalBytes, checksumAlgorithm);
-                    batchIds.Add(downloadId);
-                    queuedJobs.Add((downloadId, file));
-                    queuedCount++;
+                        string downloadId = await AddDownloadJobToQueueAsync(copyAgentId, file.RemotePath, file.LocalPath, file.TotalBytes, checksumAlgorithm);
+                        batchIds.Add(downloadId);
+                        queuedJobs.Add((downloadId, file));
+                        queuedCount++;
 
-                    if (queuedCount % 25 == 0)
-                    {
-                        tmrUpdateUI_Tick(this, EventArgs.Empty);
+                        AddOrUpdateQueuedDownloadRow(downloadId, file, checksumAlgorithm);
+                        addProgressDialog.UpdateProgress(queuedCount, filesToDownload.Count);
+                        Application.DoEvents();
                         await Task.Yield();
                     }
                 }

@@ -86,4 +86,31 @@ namespace AgentShared
         public string RelativePath { get; set; } = string.Empty;
         public long Size { get; set; }
     }
+
+    public class RemoteFileActionItem
+    {
+        public string FullPath { get; set; } = string.Empty;
+        public bool IsFolder { get; set; }
+    }
+
+    public class RemoteDeleteRequest
+    {
+        public string RequestID { get; set; } = string.Empty;
+        public List<RemoteFileActionItem> Items { get; set; } = new List<RemoteFileActionItem>();
+    }
+
+    public class RemoteOpenRequest
+    {
+        public string RequestID { get; set; } = string.Empty;
+        public string FullPath { get; set; } = string.Empty;
+    }
+
+    public class RemoteFileActionResponse
+    {
+        public string RequestID { get; set; } = string.Empty;
+        public bool Success { get; set; }
+        public string Message { get; set; } = string.Empty;
+        public List<string> Paths { get; set; } = new List<string>();
+        public List<string> Errors { get; set; } = new List<string>();
+    }
 }
