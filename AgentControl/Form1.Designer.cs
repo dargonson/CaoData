@@ -29,6 +29,7 @@
         private void InitializeComponent()
         {
             components = new System.ComponentModel.Container();
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(Form1));
             panelHeader = new Panel();
             grbchecksum = new GroupBox();
             radnone = new RadioButton();
@@ -264,8 +265,9 @@
             Controls.Add(panelZone2);
             Controls.Add(panelZone1);
             Controls.Add(panelHeader);
+            Icon = (Icon)resources.GetObject("$this.Icon");
             Name = "Form1";
-            Text = "Form1";
+            Text = "Tool Backup";
             Load += Form1_Load;
             panelHeader.ResumeLayout(false);
             grbchecksum.ResumeLayout(false);
