@@ -221,6 +221,27 @@ namespace AgentControl
         }
 
         // Hàm lấy toàn bộ danh sách Agent đã từng kết nối trong DB lên để nạp vào giao diện lúc mở app
+        public static async Task DeleteAgentAsync(string agentID)
+        {
+            await DbLock.WaitAsync();
+            try
+            {
+                using (var connection = await OpenConnectionAsync())
+                {
+                    string deleteQuery = "DELETE FROM Agents WHERE AgentID = @AgentID;";
+                    using (var cmd = new SQLiteCommand(deleteQuery, connection))
+                    {
+                        cmd.Parameters.AddWithValue("@AgentID", agentID);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+            }
+            finally
+            {
+                DbLock.Release();
+            }
+        }
+
         public static async Task<List<Dictionary<string, string>>> GetAllAgentsAsync()
         {
             var agentList = new List<Dictionary<string, string>>();

@@ -12,9 +12,12 @@ namespace NHFUiControls
     {
         private int hoveredIndex = -1;
         private int lastSelectedIndex = -1;
+        private int hoveredDeleteIndex = -1;
 
         private readonly Font titleFont = new Font("Segoe UI", 10f, FontStyle.Bold);
         private readonly Font subFont = new Font("Segoe UI", 9f);
+
+        public event EventHandler<AgentDeleteClickedEventArgs>? AgentDeleteClicked;
 
         [Category("NHF Appearance")]
         public int CardHeight
@@ -67,20 +70,30 @@ namespace NHFUiControls
         private void ListBoxNHF_MouseMove(object sender, MouseEventArgs e)
         {
             int newIndex = IndexFromPoint(e.Location);
-            if (newIndex == hoveredIndex) return;
+            int newDeleteIndex = GetDeleteButtonIndexAt(e.Location);
+            if (newIndex == hoveredIndex && newDeleteIndex == hoveredDeleteIndex) return;
 
             int oldIndex = hoveredIndex;
+            int oldDeleteIndex = hoveredDeleteIndex;
             hoveredIndex = newIndex;
+            hoveredDeleteIndex = newDeleteIndex;
 
             InvalidateItem(oldIndex);
             InvalidateItem(newIndex);
+            InvalidateItem(oldDeleteIndex);
+            InvalidateItem(newDeleteIndex);
+            Cursor = hoveredDeleteIndex >= 0 ? Cursors.Hand : Cursors.Default;
         }
 
         private void ListBoxNHF_MouseLeave(object sender, EventArgs e)
         {
             int oldIndex = hoveredIndex;
+            int oldDeleteIndex = hoveredDeleteIndex;
             hoveredIndex = -1;
+            hoveredDeleteIndex = -1;
             InvalidateItem(oldIndex);
+            InvalidateItem(oldDeleteIndex);
+            Cursor = Cursors.Default;
             //this.Refresh();
         }
 
@@ -94,6 +107,18 @@ namespace NHFUiControls
         protected override void OnMeasureItem(MeasureItemEventArgs e)
         {
             e.ItemHeight = ItemHeight;
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            int deleteIndex = GetDeleteButtonIndexAt(e.Location);
+            if (deleteIndex >= 0 && Items[deleteIndex] is AgentInfo agent)
+            {
+                AgentDeleteClicked?.Invoke(this, new AgentDeleteClickedEventArgs(agent, deleteIndex));
+                return;
+            }
+
+            base.OnMouseDown(e);
         }
 
         protected override void OnPaintBackground(PaintEventArgs e)
@@ -214,6 +239,46 @@ namespace NHFUiControls
                 agent.IsOnline
                     ? Color.FromArgb(35, 160, 70)
                     : Color.FromArgb(210, 55, 55));
+
+            DrawDeleteButton(g, GetDeleteButtonBounds(card), e.Index == hoveredDeleteIndex);
+        }
+
+        private int GetDeleteButtonIndexAt(Point location)
+        {
+            int index = IndexFromPoint(location);
+            if (index < 0 || index >= Items.Count)
+            {
+                return -1;
+            }
+
+            Rectangle itemBounds = GetItemRectangle(index);
+            Rectangle card = new Rectangle(
+                itemBounds.Left + 8,
+                itemBounds.Top + 6,
+                itemBounds.Width - 16,
+                itemBounds.Height - 12
+            );
+
+            return GetDeleteButtonBounds(card).Contains(location) ? index : -1;
+        }
+
+        private Rectangle GetDeleteButtonBounds(Rectangle card)
+        {
+            return new Rectangle(card.Right - 30, card.Top + 12, 22, 22);
+        }
+
+        private void DrawDeleteButton(Graphics g, Rectangle bounds, bool hovered)
+        {
+            Color color = hovered ? Color.FromArgb(210, 40, 40) : Color.Red;
+            if (hovered)
+            {
+                using var hoverBrush = new SolidBrush(Color.FromArgb(255, 235, 235));
+                g.FillEllipse(hoverBrush, bounds);
+            }
+
+            using var pen = new Pen(color, 2);
+            g.DrawLine(pen, bounds.Left + 6, bounds.Top + 6, bounds.Right - 6, bounds.Bottom - 6);
+            g.DrawLine(pen, bounds.Right - 6, bounds.Top + 6, bounds.Left + 6, bounds.Bottom - 6);
         }
 
         private GraphicsPath RoundRect(Rectangle r, int radius)
@@ -295,5 +360,17 @@ namespace NHFUiControls
         public bool IsOnline { get; set; }
 
         public override string ToString() => ComputerName;
+    }
+
+    public class AgentDeleteClickedEventArgs : EventArgs
+    {
+        public AgentInfo Agent { get; }
+        public int Index { get; }
+
+        public AgentDeleteClickedEventArgs(AgentInfo agent, int index)
+        {
+            Agent = agent;
+            Index = index;
+        }
     }
 }

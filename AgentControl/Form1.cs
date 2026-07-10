@@ -33,6 +33,7 @@ namespace AgentControl
         public Form1()
         {
             InitializeComponent();
+            ListboxAgents.AgentDeleteClicked += ListboxAgents_AgentDeleteClicked;
             lvRemoteFiles.View = View.Details;// Đảm bảo ListView hiển thị dạng bảng và có cột lúc chạy
         }
 
@@ -308,7 +309,7 @@ namespace AgentControl
                 {
                     RequestID = requestId,
                     RemoteRootPath = remoteRootPath,
-                    Errors = { "Timeout khi Agent liet ke file trong thu muc." }
+                    Errors = { "Hết thời gian khi Agent liệt kê cây thư mục" }
                 };
             }
             catch
@@ -380,8 +381,8 @@ namespace AgentControl
                 {
                     RequestID = requestId,
                     Success = false,
-                    Message = "Agent khong phan hoi.",
-                    Errors = { "Timeout khi doi Agent phan hoi." }
+                    Message = "Agent không phản hồi....",
+                    Errors = { "Hết thời gian đợi Agent phản hồi...." }
                 };
             }
             catch
@@ -968,7 +969,7 @@ namespace AgentControl
             }
             catch (Exception ex) when (IsConnectionLostException(ex))
             {
-                Console.WriteLine($"Mat ket noi khi dang nhan binary download chunk: {ex.Message}");
+                Console.WriteLine($"Mất kết nối khi đang nhận binary download chunk: {ex.Message}");
                 if (chunk != null && !string.IsNullOrEmpty(chunk.DownloadID))
                 {
                     long currentDownloaded = Math.Max(0, chunk.Offset);
@@ -981,7 +982,7 @@ namespace AgentControl
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Loi xu ly binary download chunk: {ex.Message}");
+                Console.WriteLine($"Lỗi xử lý binary download chunk: {ex.Message}");
                 if (chunk != null && !string.IsNullOrEmpty(chunk.DownloadID))
                 {
                     if (!bodyCopyStarted && bodySize > 0)
@@ -1822,13 +1823,13 @@ namespace AgentControl
                 {
                     if (lvRemoteFiles.CheckedItems.Count == 0)
                     {
-                        MessageBox.Show("Vui long tick chon it nhat mot muc de xoa!", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        MessageBox.Show("Vui lòng chọn ít nhất một tập tin hoặc thư mục để xoá!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         return;
                     }
 
                     DialogResult remoteConfirm = MessageBox.Show(
-                        $"Ban co chac chan muon xoa {lvRemoteFiles.CheckedItems.Count} muc da chon tren Agent khong?",
-                        "Xac nhan xoa remote",
+                        $"Bạn có muốn chắc chắn xoá {lvRemoteFiles.CheckedItems.Count} mục đã chọn không? Thao tác này không thể khôi phục",
+                        "Xác nhận xoá file",
                         MessageBoxButtons.YesNo,
                         MessageBoxIcon.Warning);
 
@@ -1856,7 +1857,7 @@ namespace AgentControl
 
                     if (request.Items.Count == 0)
                     {
-                        MessageBox.Show("Khong xac dinh duoc muc remote de xoa.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        MessageBox.Show("Không xác định được tập tin và thư mục cần xoá.", "Cảnh báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return;
                     }
 
@@ -1866,7 +1867,7 @@ namespace AgentControl
                         RemoteFileActionResponse? response = await SendRemoteActionRequestAsync(deleteRemoteTag.AgentId, "DELETE_REMOTE_ITEMS", request, request.RequestID);
                         if (response == null)
                         {
-                            MessageBox.Show("Agent dang offline hoac khong ket noi duoc.", "Loi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            MessageBox.Show("Agent đang offline hoặc không có kết nối mạng.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
                             return;
                         }
 
@@ -1904,7 +1905,7 @@ namespace AgentControl
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show("Loi khi xoa remote: " + ex.Message, "Loi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        MessageBox.Show("Lỗi khi xoá file: " + ex.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     }
                     finally
                     {
@@ -1913,13 +1914,13 @@ namespace AgentControl
 
                     return;
                 }
-                MessageBox.Show("Chức năng xóa dữ liệu remote chưa được bật cho Agent đang chọn.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("Chức năng xóa dữ liệu chưa được bật cho Agent đang chọn.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
             if (lvRemoteFiles.CheckedItems.Count == 0)
             {
-                MessageBox.Show("Vui lòng tích chọn ít nhất một mục để xóa!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("Vui lòng chọn ít nhất một mục để xóa!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -2038,17 +2039,17 @@ namespace AgentControl
                         RemoteFileActionResponse? response = await SendRemoteActionRequestAsync(remoteItem.AgentId, "OPEN_REMOTE_FILE", request, request.RequestID);
                         if (response == null)
                         {
-                            MessageBox.Show("Agent dang offline hoac khong ket noi duoc.", "Loi mo file", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            MessageBox.Show("Agent đang offlie hoặc không thể kết nối được.", "Lỗi mở file", MessageBoxButtons.OK, MessageBoxIcon.Error);
                         }
                         else if (!response.Success)
                         {
                             string errorText = response.Errors.Count > 0 ? string.Join(Environment.NewLine, response.Errors.Take(5)) : response.Message;
-                            MessageBox.Show(errorText, "Loi mo file", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            MessageBox.Show(errorText, "Lỗi mở file", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         }
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show("Khong the gui lenh mo file: " + ex.Message, "Loi mo file", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        MessageBox.Show("Không thể gửi lệnh mở file: " + ex.Message, "Lỗi mở file", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     }
 
                     return;
@@ -2179,6 +2180,67 @@ namespace AgentControl
                 );
             }
         }
+        private async void ListboxAgents_AgentDeleteClicked(object? sender, NHFUiControls.AgentDeleteClickedEventArgs e)
+        {
+            var agent = e.Agent;
+            if (agent == null || string.IsNullOrWhiteSpace(agent.AgentID))
+            {
+                return;
+            }
+
+            bool isStillConnected = _connectedAgents.ContainsKey(agent.AgentID);
+            if (agent.IsOnline || isStillConnected)
+            {
+                MessageBox.Show(
+                    
+                    "Agent đang online, vui lòng ngắt kết nối hoặc cho Agent offline trước khi xoá thông tin.",
+                    "Cảnh báo",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            DialogResult confirm = MessageBox.Show(
+                $"Bạn có chắc chắn muốn xoá Agent này không?\n\nMáy: {agent.ComputerName}\nAgent ID: {agent.AgentID}\n\nLịch sử download sẽ được giữ nguyên.",
+                "Xác nhận xoá Agent",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+
+            if (confirm != DialogResult.Yes)
+            {
+                return;
+            }
+
+            try
+            {
+                await SQLiteHelper.DeleteAgentAsync(agent.AgentID);
+                await SQLiteHelper.SaveLogAsync("Agent", $"Đã xoá thông tin Agent offline: {agent.ComputerName} | ID: {agent.AgentID}");
+
+                int removeIndex = e.Index;
+                if (removeIndex >= 0 &&
+                    removeIndex < ListboxAgents.Items.Count &&
+                    ReferenceEquals(ListboxAgents.Items[removeIndex], agent))
+                {
+                    ListboxAgents.Items.RemoveAt(removeIndex);
+                }
+                else
+                {
+                    ListboxAgents.Items.Remove(agent);
+                }
+
+                if (string.Equals(selectedAgentId, agent.AgentID, StringComparison.OrdinalIgnoreCase))
+                {
+                    selectedAgentId = string.Empty;
+                    tvRemoteFolders.Nodes.Clear();
+                    lvRemoteFiles.Items.Clear();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Không thể xoá Agent: " + ex.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
         private async void ListboxAgents_SelectedIndexChanged(object sender, EventArgs e)
         {
             // 1. Trích xuất AgentID từ dòng đang chọn
@@ -2233,7 +2295,7 @@ namespace AgentControl
 
             await SQLiteHelper.AddToDownloadQueueAsync(downloadId, agentId, remoteFilePath, localFilePath, totalBytes, checksumAlgorithm);
             _downloadLocalPathCache[downloadId] = localFilePath;
-            await SQLiteHelper.SaveLogAsync("Download", $"Báº¯t Ä‘áº§u táº¡o phiÃªn táº£i file: {fileName} | ID: {downloadId}");
+            await SQLiteHelper.SaveLogAsync("Download", $"Bắt đầu tạo phiên tải file: {fileName} | ID: {downloadId}");
             return downloadId;
         }
 
@@ -2269,7 +2331,7 @@ namespace AgentControl
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Lá»—i báº¯n gÃ³i tin táº£i file {fileName}: {ex.Message}");
+                        Console.WriteLine($"Lỗi bắn gói tin tải file {fileName}: {ex.Message}");
                         await SQLiteHelper.UpdateDownloadProgressAsync(downloadId, offset, "Error");
                     }
                 }
@@ -2405,7 +2467,7 @@ namespace AgentControl
                             if (folderResponse == null)
                             {
                                 skippedFolders++;
-                                folderErrors.Add(remoteItem.FullPath + ": Agent khong phan hoi.");
+                                folderErrors.Add(remoteItem.FullPath + ": Agent không phản hồi.");
                                 continue;
                             }
 
@@ -2486,12 +2548,12 @@ namespace AgentControl
 
                 if (skippedFolders > 0)
                 {
-                    MessageBox.Show($"Da bo qua {skippedFolders} thu muc remote vi Agent khong phan hoi.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show($"Đã bỏ qua {skippedFolders} thư mục vì Agent không phản hồi.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
 
                 if (folderErrors.Count > 0)
                 {
-                    MessageBox.Show($"Co {folderErrors.Count} loi khi liet ke thu muc remote. Cac file doc duoc van da duoc them vao hang doi.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show($"Có {folderErrors.Count} lỗi khi đang liệt kê thư mục. Các file đọc được vẫn được thêm vào hàng đợi.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
 
                 MessageBox.Show($"Đã thêm thành công {filesToDownload.Count} file vào hàng đợi tải xuống.", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -2550,7 +2612,7 @@ namespace AgentControl
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Khong the clear danh sach download: " + ex.Message, "Loi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Không thể xoá danh sách download: " + ex.Message, "Loi", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
