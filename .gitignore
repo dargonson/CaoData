@@ -24,7 +24,7 @@ packages/
 *.log
 *.tmp
 *.cache
-
+AgentServices/appsettings.json
 # SQLite local database
 *.db
 *.sqlite
