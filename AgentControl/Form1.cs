@@ -2,6 +2,7 @@
 using AgentShared; // ⬅️ Thêm mới
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.ComponentModel.Design.Serialization;
 using System.Net; // ⬅️ Thêm mới
 using System.Net.Sockets; // ⬅️ Thêm mới
 using System.Text; // ⬅️ Thêm mới
@@ -593,20 +594,20 @@ namespace AgentControl
             dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "FileName", HeaderText = "Tên Tập Tin", Width = 200, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill }); // [cite: 8]
 
             // 3. Cột Dung Lượng
-            dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "TotalSize", HeaderText = "Dung Lượng", Width = 100 }); // [cite: 9]
+            dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "TotalSize", HeaderText = "Dung Lượng", Width = 68 }); // [cite: 9]
 
             // 4. Cột Tiến Độ (Sử dụng con hàng Custom ProgressBar vừa tạo ở Bước 1)
             var progressCol = new DataGridViewProgressBarColumn();
             progressCol.Name = "Progress";
             progressCol.HeaderText = "Tiến Độ";
-            progressCol.Width = 150;
+            progressCol.Width = 120;
             dgvDownloads.Columns.Add(progressCol); // [cite: 10]
 
             // 5. Cột Tốc Độ
-            dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "Speed", HeaderText = "Tốc Độ", Width = 100 }); // [cite: 11]
+            dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "Speed", HeaderText = "Tốc Độ", Width = 78 }); // [cite: 11]
 
             // 6. Cột Trạng Thái
-            dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Trạng Thái", Width = 230 }); // [cite: 13, 14]
+            dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Trạng Thái", Width = 205 }); // [cite: 13, 14]
         }
         private void dgvDownloads_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
         {
@@ -1817,176 +1818,189 @@ namespace AgentControl
 
         private async void brndel_Click(object sender, EventArgs e)
         {
-            if (TryGetRemoteNodeTag(tvRemoteFolders.SelectedNode, out RemoteNodeTag? deleteRemoteTag) && deleteRemoteTag != null)
+            string timeStr = $"{DateTime.Now:HHmm}";
+            if (txtxoa.Text != timeStr)
             {
-                if (deleteRemoteTag.AgentId.Length >= 0)
+                MessageBox.Show("Nhập sai pass rồi.", "Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            else
+            {
+                txtxoa.Text = "";
+                if (TryGetRemoteNodeTag(tvRemoteFolders.SelectedNode, out RemoteNodeTag? deleteRemoteTag) && deleteRemoteTag != null)
                 {
-                    if (lvRemoteFiles.CheckedItems.Count == 0)
+                    if (deleteRemoteTag.AgentId.Length >= 0)
                     {
-                        MessageBox.Show("Vui lòng chọn ít nhất một tập tin hoặc thư mục để xoá!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        return;
-                    }
-
-                    DialogResult remoteConfirm = MessageBox.Show(
-                        $"Bạn có muốn chắc chắn xoá {lvRemoteFiles.CheckedItems.Count} mục đã chọn không? Thao tác này không thể khôi phục",
-                        "Xác nhận xoá file",
-                        MessageBoxButtons.YesNo,
-                        MessageBoxIcon.Warning);
-
-                    if (remoteConfirm != DialogResult.Yes)
-                    {
-                        return;
-                    }
-
-                    var request = new RemoteDeleteRequest
-                    {
-                        RequestID = Guid.NewGuid().ToString()
-                    };
-
-                    foreach (ListViewItem checkedItem in lvRemoteFiles.CheckedItems)
-                    {
-                        if (TryGetRemoteFileItem(checkedItem, deleteRemoteTag, out RemoteFileItemTag remoteItem))
+                        if (lvRemoteFiles.CheckedItems.Count == 0)
                         {
-                            request.Items.Add(new RemoteFileActionItem
-                            {
-                                FullPath = remoteItem.FullPath,
-                                IsFolder = remoteItem.IsFolder
-                            });
-                        }
-                    }
-
-                    if (request.Items.Count == 0)
-                    {
-                        MessageBox.Show("Không xác định được tập tin và thư mục cần xoá.", "Cảnh báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        return;
-                    }
-
-                    brndel.Enabled = false;
-                    try
-                    {
-                        RemoteFileActionResponse? response = await SendRemoteActionRequestAsync(deleteRemoteTag.AgentId, "DELETE_REMOTE_ITEMS", request, request.RequestID);
-                        if (response == null)
-                        {
-                            MessageBox.Show("Agent đang offline hoặc không có kết nối mạng.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            MessageBox.Show("Vui lòng chọn ít nhất một tập tin hoặc thư mục để xoá!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
                             return;
                         }
 
-                        var deletedPaths = new HashSet<string>(response.Paths, StringComparer.OrdinalIgnoreCase);
-                        for (int i = lvRemoteFiles.Items.Count - 1; i >= 0; i--)
+                        DialogResult remoteConfirm = MessageBox.Show(
+                            $"Bạn có muốn chắc chắn xoá {lvRemoteFiles.CheckedItems.Count} mục đã chọn không? Thao tác này không thể khôi phục",
+                            "Xác nhận xoá file",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Warning);
+
+                        if (remoteConfirm != DialogResult.Yes)
                         {
-                            ListViewItem item = lvRemoteFiles.Items[i];
-                            if (TryGetRemoteFileItem(item, deleteRemoteTag, out RemoteFileItemTag remoteItem) &&
-                                deletedPaths.Contains(remoteItem.FullPath))
+                            return;
+                        }
+
+                        var request = new RemoteDeleteRequest
+                        {
+                            RequestID = Guid.NewGuid().ToString()
+                        };
+
+                        foreach (ListViewItem checkedItem in lvRemoteFiles.CheckedItems)
+                        {
+                            if (TryGetRemoteFileItem(checkedItem, deleteRemoteTag, out RemoteFileItemTag remoteItem))
                             {
-                                lvRemoteFiles.Items.RemoveAt(i);
-                            }
-                        }
-
-                        for (int i = tvRemoteFolders.SelectedNode.Nodes.Count - 1; i >= 0; i--)
-                        {
-                            TreeNode node = tvRemoteFolders.SelectedNode.Nodes[i];
-                            if (node.Tag is RemoteNodeTag nodeTag && deletedPaths.Contains(nodeTag.RemotePath))
-                            {
-                                tvRemoteFolders.SelectedNode.Nodes.RemoveAt(i);
-                            }
-                        }
-
-                        if (response.Success)
-                        {
-                            MessageBox.Show(response.Message, "Thanh cong", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        }
-                        else
-                        {
-                            string errorText = response.Errors.Count > 0 ? string.Join(Environment.NewLine, response.Errors.Take(5)) : response.Message;
-                            MessageBox.Show(response.Message + Environment.NewLine + errorText, "Loi xoa remote", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        }
-
-                        _ = RequestRemoteDirectoryAsync(deleteRemoteTag);
-                    }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show("Lỗi khi xoá file: " + ex.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    }
-                    finally
-                    {
-                        brndel.Enabled = true;
-                    }
-
-                    return;
-                }
-                MessageBox.Show("Chức năng xóa dữ liệu chưa được bật cho Agent đang chọn.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            if (lvRemoteFiles.CheckedItems.Count == 0)
-            {
-                MessageBox.Show("Vui lòng chọn ít nhất một mục để xóa!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            DialogResult confirm = MessageBox.Show(
-                $"Bạn có chắc chắn muốn xóa {lvRemoteFiles.CheckedItems.Count} mục đã chọn không?\nHành động này sẽ đưa mục vào Thùng rác.",
-                "Xác nhận xóa",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning
-            );
-
-            if (confirm == DialogResult.Yes)
-            {
-                if (tvRemoteFolders.SelectedNode == null || tvRemoteFolders.SelectedNode.Tag == null) return;
-
-                // Lấy nút cha hiện tại đang được chọn ở Vùng 2
-                TreeNode parentNode = tvRemoteFolders.SelectedNode;
-                string currentFolderPath = parentNode.Tag.ToString();
-
-                System.Collections.Generic.List<ListViewItem> itemsToRemove = new System.Collections.Generic.List<ListViewItem>();
-
-                foreach (ListViewItem checkedItem in lvRemoteFiles.CheckedItems)
-                {
-                    string itemName = checkedItem.Text;
-                    string fullPath = Path.Combine(currentFolderPath, itemName);
-
-                    try
-                    {
-                        // THỦ TỤC XOÁ VẬT LÝ VÀ ĐỒNG BỘ CÂY THƯ MỤC
-                        if (Directory.Exists(fullPath))
-                        {
-                            // 1. Xóa Folder dưới ổ đĩa đưa vào thùng rác
-                            Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(fullPath, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
-
-                            // 2. ĐỒNG BỘ VÙNG 2: Tìm nút con có tên trùng khớp trên cây TreeView để xóa
-                            foreach (TreeNode subNode in parentNode.Nodes)
-                            {
-                                // Kiểm tra nếu đường dẫn lưu trong Tag trùng khớp với Folder vừa xóa
-                                if (subNode.Tag != null && subNode.Tag.ToString().Equals(fullPath, StringComparison.OrdinalIgnoreCase))
+                                request.Items.Add(new RemoteFileActionItem
                                 {
-                                    parentNode.Nodes.Remove(subNode); // Xóa nút này khỏi Vùng 2 luôn
-                                    break; // Tìm thấy và xóa xong thì thoát vòng lặp ngay
+                                    FullPath = remoteItem.FullPath,
+                                    IsFolder = remoteItem.IsFolder
+                                });
+                            }
+                        }
+
+                        if (request.Items.Count == 0)
+                        {
+                            MessageBox.Show("Không xác định được tập tin và thư mục cần xoá.", "Cảnh báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            return;
+                        }
+
+                        brndel.Enabled = false;
+                        try
+                        {
+                            RemoteFileActionResponse? response = await SendRemoteActionRequestAsync(deleteRemoteTag.AgentId, "DELETE_REMOTE_ITEMS", request, request.RequestID);
+                            if (response == null)
+                            {
+                                MessageBox.Show("Agent đang offline hoặc không có kết nối mạng.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                return;
+                            }
+
+                            var deletedPaths = new HashSet<string>(response.Paths, StringComparer.OrdinalIgnoreCase);
+                            for (int i = lvRemoteFiles.Items.Count - 1; i >= 0; i--)
+                            {
+                                ListViewItem item = lvRemoteFiles.Items[i];
+                                if (TryGetRemoteFileItem(item, deleteRemoteTag, out RemoteFileItemTag remoteItem) &&
+                                    deletedPaths.Contains(remoteItem.FullPath))
+                                {
+                                    lvRemoteFiles.Items.RemoveAt(i);
                                 }
                             }
+
+                            for (int i = tvRemoteFolders.SelectedNode.Nodes.Count - 1; i >= 0; i--)
+                            {
+                                TreeNode node = tvRemoteFolders.SelectedNode.Nodes[i];
+                                if (node.Tag is RemoteNodeTag nodeTag && deletedPaths.Contains(nodeTag.RemotePath))
+                                {
+                                    tvRemoteFolders.SelectedNode.Nodes.RemoveAt(i);
+                                }
+                            }
+
+                            if (response.Success)
+                            {
+                                MessageBox.Show(response.Message, "Thanh cong", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            }
+                            else
+                            {
+                                string errorText = response.Errors.Count > 0 ? string.Join(Environment.NewLine, response.Errors.Take(5)) : response.Message;
+                                MessageBox.Show(response.Message + Environment.NewLine + errorText, "Loi xoa remote", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            }
+
+                            _ = RequestRemoteDirectoryAsync(deleteRemoteTag);
                         }
-                        else if (File.Exists(fullPath))
+                        catch (Exception ex)
                         {
-                            // Nếu là File thì chỉ cần xóa dưới ổ đĩa (vì Vùng 2 không hiển thị File nên không cần đồng bộ)
-                            Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(fullPath, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                            MessageBox.Show("Lỗi khi xoá file: " + ex.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
+                        finally
+                        {
+                            brndel.Enabled = true;
                         }
 
-                        itemsToRemove.Add(checkedItem);
+                        return;
                     }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show($"Lỗi khi xóa mục {itemName}: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    }
+                    MessageBox.Show("Chức năng xóa dữ liệu chưa được bật cho Agent đang chọn.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
                 }
 
-                // Cập nhật lại giao diện Vùng 3
-                foreach (ListViewItem item in itemsToRemove)
+                if (lvRemoteFiles.CheckedItems.Count == 0)
                 {
-                    lvRemoteFiles.Items.Remove(item);
+                    MessageBox.Show("Vui lòng chọn ít nhất một mục để xóa!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
                 }
 
-                MessageBox.Show("Đã hoàn thành xóa và đồng bộ dữ liệu!", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                DialogResult confirm = MessageBox.Show(
+                    $"Bạn có chắc chắn muốn xóa {lvRemoteFiles.CheckedItems.Count} mục đã chọn không?\nHành động này sẽ đưa mục vào Thùng rác.",
+                    "Xác nhận xóa",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning
+                );
+
+                if (confirm == DialogResult.Yes)
+                {
+
+                    if (tvRemoteFolders.SelectedNode == null || tvRemoteFolders.SelectedNode.Tag == null) return;
+
+                    // Lấy nút cha hiện tại đang được chọn ở Vùng 2
+                    TreeNode parentNode = tvRemoteFolders.SelectedNode;
+                    string currentFolderPath = parentNode.Tag.ToString();
+
+                    System.Collections.Generic.List<ListViewItem> itemsToRemove = new System.Collections.Generic.List<ListViewItem>();
+
+                    foreach (ListViewItem checkedItem in lvRemoteFiles.CheckedItems)
+                    {
+                        string itemName = checkedItem.Text;
+                        string fullPath = Path.Combine(currentFolderPath, itemName);
+
+                        try
+                        {
+                            // THỦ TỤC XOÁ VẬT LÝ VÀ ĐỒNG BỘ CÂY THƯ MỤC
+                            if (Directory.Exists(fullPath))
+                            {
+                                // 1. Xóa Folder dưới ổ đĩa đưa vào thùng rác
+                                Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(fullPath, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+
+                                // 2. ĐỒNG BỘ VÙNG 2: Tìm nút con có tên trùng khớp trên cây TreeView để xóa
+                                foreach (TreeNode subNode in parentNode.Nodes)
+                                {
+                                    // Kiểm tra nếu đường dẫn lưu trong Tag trùng khớp với Folder vừa xóa
+                                    if (subNode.Tag != null && subNode.Tag.ToString().Equals(fullPath, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        parentNode.Nodes.Remove(subNode); // Xóa nút này khỏi Vùng 2 luôn
+                                        break; // Tìm thấy và xóa xong thì thoát vòng lặp ngay
+                                    }
+                                }
+                            }
+                            else if (File.Exists(fullPath))
+                            {
+                                // Nếu là File thì chỉ cần xóa dưới ổ đĩa (vì Vùng 2 không hiển thị File nên không cần đồng bộ)
+                                Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(fullPath, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                            }
+
+                            itemsToRemove.Add(checkedItem);
+                        }
+                        catch (Exception ex)
+                        {
+                            MessageBox.Show($"Lỗi khi xóa mục {itemName}: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
+
+                    }
+
+                    // Cập nhật lại giao diện Vùng 3
+                    foreach (ListViewItem item in itemsToRemove)
+                    {
+                        lvRemoteFiles.Items.Remove(item);
+                    }
+
+                    MessageBox.Show("Đã hoàn thành xóa và đồng bộ dữ liệu!", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    txtxoa.Text = "";
+                }
             }
+            ;
         }
 
         private void tvRemoteFolders_BeforeCollapse(object sender, TreeViewCancelEventArgs e)
