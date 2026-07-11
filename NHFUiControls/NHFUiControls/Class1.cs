@@ -231,7 +231,7 @@ namespace NHFUiControls
                 TextFormatFlags.EndEllipsis);
 
             TextRenderer.DrawText(g, $"Agent ID: {agent.AgentID}", subFont,
-                new Rectangle(textX, textY + 82, Math.Max(70, textWidth - 72), 20),
+                new Rectangle(textX, textY + 82, Math.Max(70, card.Right - textX - 10), 20),
                 Color.FromArgb(70, 85, 105),
                 TextFormatFlags.EndEllipsis);
 
