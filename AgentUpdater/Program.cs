@@ -15,11 +15,7 @@ namespace AgentUpdater
         {
             UpdateOptions? options = null;
             UpdateStatusReporter? reporter = null;
-            string logPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                "AgentServices",
-                "Updates",
-                "AgentUpdater.log");
+            string logPath = AppVersion.GetAgentUpdaterLogPath();
 
             try
             {
@@ -99,11 +95,7 @@ namespace AgentUpdater
 
         private static async Task WriteCompletionMarkerAsync(UpdateOptions options)
         {
-            string markerPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                "AgentServices",
-                "Updates",
-                "pending-update-complete.json");
+            string markerPath = AppVersion.GetAgentUpdateCompletionMarkerPath();
 
             var marker = new AgentUpdateCompletionMarker
             {

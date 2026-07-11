@@ -32,11 +32,7 @@ namespace AgentService
 
         public static string GetCompletionMarkerPath()
         {
-            return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                "AgentServices",
-                "Updates",
-                "pending-update-complete.json");
+            return AppVersion.GetAgentUpdateCompletionMarkerPath();
         }
 
         public async Task SendPendingCompletionStatusAsync(string agentId, CancellationToken cancellationToken)
@@ -104,11 +100,7 @@ namespace AgentService
                 throw new InvalidDataException("Gói update không hợp lệ.");
             }
 
-            string sessionRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                "AgentServices",
-                "Updates",
-                request.SessionId);
+            string sessionRoot = AppVersion.GetAgentUpdateSessionDirectory(request.SessionId);
 
             Directory.CreateDirectory(sessionRoot);
 
