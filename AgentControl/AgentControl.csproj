@@ -18,4 +18,10 @@
     <ProjectReference Include="..\NHFUiControls\NHFUiControls\NHFUiControls.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Updates\AgentServices\README.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

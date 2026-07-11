@@ -13,7 +13,7 @@ namespace AgentControl
 {
     public partial class Form1 : Form
     {
-        private const string ControlCurrentVersion = AppVersion.CurrentVersion;
+        private const string ControlCurrentVersion = AppVersion.CurrentVersionControl;
 
         // --- BIẾN KHỞI TẠO SOCKET SERVER ---
         private TcpListener _serverListener;
@@ -27,6 +27,7 @@ namespace AgentControl
         private ConcurrentDictionary<string, string> _pendingDirectoryRequests = new ConcurrentDictionary<string, string>();
         private ConcurrentDictionary<string, TaskCompletionSource<RemoteFolderFilesResponse>> _pendingFolderFileRequests = new ConcurrentDictionary<string, TaskCompletionSource<RemoteFolderFilesResponse>>();
         private ConcurrentDictionary<string, TaskCompletionSource<RemoteFileActionResponse>> _pendingRemoteActionRequests = new ConcurrentDictionary<string, TaskCompletionSource<RemoteFileActionResponse>>();
+        private Dictionary<string, AgentUpdateStatusForm> _agentUpdateStatusForms = new Dictionary<string, AgentUpdateStatusForm>(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> _activeDownloadBatchIds = new HashSet<string>();
         private bool _activeDownloadBatchNotified = true;
         private bool _isDownloadGridRefreshing = false;
@@ -711,12 +712,7 @@ namespace AgentControl
         private static string FormatVersionForDisplay(string? versionText)
         {
             System.Version version = ParseVersionOrZero(versionText);
-            if (version.Build == 0 && version.Revision == 0)
-            {
-                return $"{version.Major}.{version.Minor}";
-            }
-
-            return version.ToString();
+            return $"{version.Major}.{version.Minor}";
         }
 
         private static bool IsAgentVersionOlderThanControl(string? agentVersion)
@@ -797,22 +793,57 @@ namespace AgentControl
                 return;
             }
 
-            var updateRequest = new
-            {
-                CurrentVersion = NormalizeVersionText(currentAgentVersion),
-                TargetVersion = ControlCurrentVersion,
-                RequestedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-            };
+            string sessionId = Guid.NewGuid().ToString("N");
 
-            SocketPacket requestPacket = new SocketPacket
+            try
             {
-                Type = "UPDATE_AGENT",
-                AgentID = agentId,
-                Data = JsonSerializer.Serialize(updateRequest)
-            };
+                AddAgentUpdateStatus(agentId, new AgentUpdateStatus
+                {
+                    SessionId = sessionId,
+                    Status = "Start",
+                    Message = "Bắt đầu gửi lệnh update từ Control.",
+                    Version = ControlCurrentVersion,
+                    Source = "Control",
+                    CreatedAt = DateTime.Now.ToString("HH:mm:ss")
+                });
 
-            await SendPacketToAgentAsync(agentId, agentInfo.Client, requestPacket);
-            MessageBox.Show("Đã gửi lệnh update tới Agent.", "Cập nhật Agent", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                var updateServer = new AgentUpdateServer();
+                await updateServer.SendUpdateAsync(
+                    agentId,
+                    NormalizeVersionText(currentAgentVersion),
+                    sessionId,
+                    packet => SendPacketToAgentAsync(agentId, agentInfo.Client, packet),
+                    status => AddAgentUpdateStatus(agentId, status));
+
+                MessageBox.Show("Đã gửi gói update tới Agent.", "Cập nhật Agent", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Không thể gửi update: " + ex.Message, "Cập nhật Agent", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void AddAgentUpdateStatus(string agentId, AgentUpdateStatus status)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => AddAgentUpdateStatus(agentId, status)));
+                return;
+            }
+
+            string sessionKey = string.IsNullOrWhiteSpace(status.SessionId)
+                ? agentId
+                : status.SessionId;
+
+            if (!_agentUpdateStatusForms.TryGetValue(sessionKey, out AgentUpdateStatusForm? form) || form.IsDisposed)
+            {
+                form = new AgentUpdateStatusForm(agentId);
+                form.FormClosed += (_, _) => _agentUpdateStatusForms.Remove(sessionKey);
+                _agentUpdateStatusForms[sessionKey] = form;
+                form.Show(this);
+            }
+
+            form.AddStatus(status);
         }
 
         private async Task SendPacketToAgentAsync(string agentId, TcpClient client, SocketPacket packet)
@@ -1239,6 +1270,18 @@ namespace AgentControl
                                     if (response != null)
                                     {
                                         CompleteRemoteFileActionRequest(response);
+                                    }
+                                }
+                            }
+                            else if (packet.Type == AgentUpdatePacketTypes.UpdateAgentStatus)
+                            {
+                                if (!string.IsNullOrEmpty(packet.Data))
+                                {
+                                    var status = JsonSerializer.Deserialize<AgentUpdateStatus>(packet.Data);
+                                    if (status != null)
+                                    {
+                                        AddAgentUpdateStatus(packet.AgentID, status);
+                                        await SQLiteHelper.SaveLogAsync("Update", $"Agent {packet.AgentID}: {status.Status} - {status.Message}");
                                     }
                                 }
                             }

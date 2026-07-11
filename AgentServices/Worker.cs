@@ -18,10 +18,13 @@ namespace AgentService
 {
     public class Worker : BackgroundService
     {
-        private const string AgentServiceVersion = AppVersion.CurrentVersion;
+        private const string AgentServiceVersion = AppVersion.CurrentVersionAgent;
 
         private readonly ILogger<Worker> _logger;
         private readonly IConfiguration _configuration;
+        private readonly AgentUpdateClient _updateClient;
+        private string _activeControlHost = "127.0.0.1";
+        private int _activeControlPort = 9000;
 
         private TcpClient? _client;
         private NetworkStream? _stream;
@@ -37,6 +40,7 @@ namespace AgentService
         {
             _logger = logger;
             _configuration = configuration;
+            _updateClient = new AgentUpdateClient(SendPacketAsync, () => (_activeControlHost, _activeControlPort), logger);
         }
 
 
@@ -317,6 +321,7 @@ namespace AgentService
 
                             // Đăng ký thông tin máy với Server ngay khi vừa kết nối
                             await SendRegisterInfoAsync();
+                            await _updateClient.SendPendingCompletionStatusAsync(agentID, stoppingToken);
 
                             // Kích hoạt luồng gửi Tim Mạch (Heartbeat) song song định kỳ 30 giây
                             _ = StartHeartbeatLoopAsync(agentID, stoppingToken);
@@ -370,6 +375,8 @@ namespace AgentService
                     _client?.Close();
                     _client = client;
                     _stream = _client.GetStream();
+                    _activeControlHost = ip;
+                    _activeControlPort = port;
                     _logger?.LogInformation("Kết nối {Profile} thành công: {Ip}:{Port}", profileName, ip, port);
                     return true;
                 }
@@ -934,6 +941,12 @@ namespace AgentService
 
                     if (packet != null)
                     {
+                        if (AgentUpdateClient.IsUpdatePacket(packet.Type))
+                        {
+                            await _updateClient.HandlePacketAsync(packet, token);
+                            continue;
+                        }
+
                         _logger?.LogInformation("Nhận lệnh từ Server: {Type}", packet.Type);
 
                         // ====================================================================

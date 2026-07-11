@@ -2,6 +2,7 @@ namespace AgentShared
 {
     public static class AppVersion
     {
-        public const string CurrentVersion = "1.0.1";
+        public const string CurrentVersionControl = "1.1";
+        public const string CurrentVersionAgent = "1.0";
     }
 }
