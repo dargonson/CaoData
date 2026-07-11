@@ -31,6 +31,8 @@
             components = new System.ComponentModel.Container();
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(Form1));
             panelHeader = new Panel();
+            lblver = new Label();
+            txtxoa = new TextBox();
             grbchecksum = new GroupBox();
             radnone = new RadioButton();
             radmd5 = new RadioButton();
@@ -52,7 +54,6 @@
             ColDate = new ColumnHeader();
             panel1 = new Panel();
             panel2 = new Panel();
-            txtxoa = new TextBox();
             panelHeader.SuspendLayout();
             grbchecksum.SuspendLayout();
             panelZone1.SuspendLayout();
@@ -65,6 +66,7 @@
             // panelHeader
             // 
             panelHeader.AutoSize = true;
+            panelHeader.Controls.Add(lblver);
             panelHeader.Controls.Add(txtxoa);
             panelHeader.Controls.Add(grbchecksum);
             panelHeader.Controls.Add(btncleardrv);
@@ -77,6 +79,22 @@
             panelHeader.Name = "panelHeader";
             panelHeader.Size = new Size(1747, 57);
             panelHeader.TabIndex = 0;
+            // 
+            // lblver
+            // 
+            lblver.AutoSize = true;
+            lblver.Location = new Point(1697, 11);
+            lblver.Name = "lblver";
+            lblver.Size = new Size(38, 15);
+            lblver.TabIndex = 6;
+            lblver.Text = "label1";
+            // 
+            // txtxoa
+            // 
+            txtxoa.Location = new Point(574, 3);
+            txtxoa.Name = "txtxoa";
+            txtxoa.Size = new Size(139, 23);
+            txtxoa.TabIndex = 5;
             // 
             // grbchecksum
             // 
@@ -279,13 +297,6 @@
             panel2.Size = new Size(693, 604);
             panel2.TabIndex = 6;
             // 
-            // txtxoa
-            // 
-            txtxoa.Location = new Point(574, 3);
-            txtxoa.Name = "txtxoa";
-            txtxoa.Size = new Size(139, 23);
-            txtxoa.TabIndex = 5;
-            // 
             // Form1
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
@@ -343,5 +354,6 @@
         private DataGridViewTextBoxColumn C;
         private DataGridViewTextBoxColumn D;
         private TextBox txtxoa;
+        private Label lblver;
     }
 }

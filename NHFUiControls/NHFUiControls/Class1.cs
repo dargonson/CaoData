@@ -16,6 +16,7 @@ namespace NHFUiControls
 
         private readonly Font titleFont = new Font("Segoe UI", 10f, FontStyle.Bold);
         private readonly Font subFont = new Font("Segoe UI", 9f);
+        private readonly Font versionFont = new Font("Segoe UI", 8f, FontStyle.Bold);
 
         public event EventHandler<AgentDeleteClickedEventArgs>? AgentDeleteClicked;
 
@@ -133,6 +134,7 @@ namespace NHFUiControls
             string ip,
             string os,
             string agentID,
+            string agentVersion,
             bool online)
         {
             Items.Add(new AgentInfo
@@ -142,6 +144,7 @@ namespace NHFUiControls
                 Ip = ip,
                 Os = os,
                 AgentID = agentID,
+                AgentVersion = agentVersion,
                 IsOnline = online
             });
 
@@ -228,17 +231,74 @@ namespace NHFUiControls
                 TextFormatFlags.EndEllipsis);
 
             TextRenderer.DrawText(g, $"Agent ID: {agent.AgentID}", subFont,
-                new Rectangle(textX, textY + 82, textWidth, 20),
+                new Rectangle(textX, textY + 82, Math.Max(70, textWidth - 72), 20),
                 Color.FromArgb(70, 85, 105),
                 TextFormatFlags.EndEllipsis);
 
-            TextRenderer.DrawText(g,
-                agent.IsOnline ? "Online" : "Offline",
+            /* string versionText = string.IsNullOrWhiteSpace(agent.AgentVersion)
+                 ? "ver ?"
+                 : $"ver {agent.AgentVersion}";
+             TextRenderer.DrawText(g, versionText, versionFont,
+                 new Rectangle(card.Right - 68, textY + 82, 60, 20),
+                 Color.FromArgb(235, 126, 25),
+                 TextFormatFlags.Right | TextFormatFlags.EndEllipsis);*/
+            //
+            //
+            //
+            string statusText = agent.IsOnline ? "Online" : "Offline";
+
+            string versionText = string.IsNullOrWhiteSpace(agent.AgentVersion)
+                ? "ver ?"
+                : $"ver {agent.AgentVersion}";
+
+            int lineY = textY + 55;
+            int gap = 1;
+
+            int statusX = card.Right - 78;
+
+            Size statusSize = TextRenderer.MeasureText(
+                statusText,
                 subFont,
-                new Point(card.Right - 78, card.Top + (card.Height / 2)),
+                Size.Empty,
+                TextFormatFlags.NoPadding);
+
+            Size versionSize = TextRenderer.MeasureText(
+                versionText,
+                versionFont,
+                Size.Empty,
+                TextFormatFlags.NoPadding);
+
+            int statusCenterX = statusX + statusSize.Width / 2;
+
+            TextRenderer.DrawText(
+                g,
+                statusText,
+                subFont,
+                new Point(
+                    statusX,
+                    lineY - statusSize.Height - gap
+                ),
                 agent.IsOnline
                     ? Color.FromArgb(35, 160, 70)
-                    : Color.FromArgb(210, 55, 55));
+                    : Color.FromArgb(210, 55, 55),
+                TextFormatFlags.NoPadding
+            );
+
+            TextRenderer.DrawText(
+                g,
+                versionText,
+                versionFont,
+                new Point(
+                    statusCenterX - versionSize.Width / 2,
+                    lineY + gap
+                ),
+                Color.FromArgb(34, 4, 202),
+                TextFormatFlags.NoPadding
+            );
+
+            //
+            //
+            //
 
             DrawDeleteButton(g, GetDeleteButtonBounds(card), e.Index == hoveredDeleteIndex);
         }
@@ -344,6 +404,7 @@ namespace NHFUiControls
             {
                 titleFont.Dispose();
                 subFont.Dispose();
+                versionFont.Dispose();
             }
 
             base.Dispose(disposing);
@@ -357,6 +418,7 @@ namespace NHFUiControls
         public string Ip { get; set; } = "";
         public string Os { get; set; } = "";
         public string AgentID { get; set; } = "";
+        public string AgentVersion { get; set; } = "";
         public bool IsOnline { get; set; }
 
         public override string ToString() => ComputerName;

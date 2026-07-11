@@ -18,6 +18,8 @@ namespace AgentService
 {
     public class Worker : BackgroundService
     {
+        private const string AgentServiceVersion = AppVersion.CurrentVersion;
+
         private readonly ILogger<Worker> _logger;
         private readonly IConfiguration _configuration;
 
@@ -84,7 +86,7 @@ namespace AgentService
                 Username = username,
                 IPAddress = GetLocalIPAddress(), // Gọi hàm lấy IP LAN
                 OSVersion = osVersion,
-                AgentVersion = "1.0.0"
+                AgentVersion = AgentServiceVersion
             };
         }
 

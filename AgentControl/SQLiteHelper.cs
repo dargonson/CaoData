@@ -113,6 +113,7 @@ namespace AgentControl
                         await cmd.ExecuteNonQueryAsync();
                     }
 
+                    await EnsureColumnExistsAsync(connection, "Agents", "AgentVersion", "TEXT DEFAULT ''");
                     await EnsureColumnExistsAsync(connection, "DownloadQueue", "ChecksumAlgorithm", "TEXT DEFAULT 'None'");
                 }
             }

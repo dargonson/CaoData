@@ -13,6 +13,7 @@ namespace AgentControl
 {
     public partial class Form1 : Form
     {
+        private const string ControlCurrentVersion = AppVersion.CurrentVersion;
 
         // --- BIẾN KHỞI TẠO SOCKET SERVER ---
         private TcpListener _serverListener;
@@ -34,6 +35,7 @@ namespace AgentControl
         public Form1()
         {
             InitializeComponent();
+            InitializeControlVersionLabel();
             ListboxAgents.AgentDeleteClicked += ListboxAgents_AgentDeleteClicked;
             lvRemoteFiles.View = View.Details;// Đảm bảo ListView hiển thị dạng bảng và có cột lúc chạy
         }
@@ -697,6 +699,120 @@ namespace AgentControl
                 counter++;
             }
             return string.Format("{0:n2} {1}", number, suffixes[counter]);
+        }
+
+        private void InitializeControlVersionLabel()
+        {
+            lblver.Text = $"ver {FormatVersionForDisplay(ControlCurrentVersion)}";
+            lblver.ForeColor = Color.FromArgb(235, 126, 25);
+            lblver.Font = new Font(lblver.Font.FontFamily, Math.Max(7f, lblver.Font.Size - 1f), FontStyle.Bold);
+        }
+
+        private static string FormatVersionForDisplay(string? versionText)
+        {
+            System.Version version = ParseVersionOrZero(versionText);
+            if (version.Build == 0 && version.Revision == 0)
+            {
+                return $"{version.Major}.{version.Minor}";
+            }
+
+            return version.ToString();
+        }
+
+        private static bool IsAgentVersionOlderThanControl(string? agentVersion)
+        {
+            return ParseVersionOrZero(agentVersion).CompareTo(ParseVersionOrZero(ControlCurrentVersion)) < 0;
+        }
+
+        private static System.Version ParseVersionOrZero(string? versionText)
+        {
+            string normalized = NormalizeVersionText(versionText);
+            if (!System.Version.TryParse(normalized, out System.Version? parsed))
+            {
+                return new System.Version(0, 0, 0, 0);
+            }
+
+            return new System.Version(
+                Math.Max(parsed.Major, 0),
+                Math.Max(parsed.Minor, 0),
+                Math.Max(parsed.Build, 0),
+                Math.Max(parsed.Revision, 0));
+        }
+
+        private static string NormalizeVersionText(string? versionText)
+        {
+            if (string.IsNullOrWhiteSpace(versionText))
+            {
+                return "0.0.0";
+            }
+
+            string normalized = versionText.Trim();
+            if (normalized.StartsWith("Version:", StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = normalized.Substring("Version:".Length).Trim();
+            }
+            if (normalized.StartsWith("ver", StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = normalized.Substring(3).Trim();
+            }
+            if (normalized.StartsWith("v", StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = normalized.Substring(1).Trim();
+            }
+
+            int end = 0;
+            while (end < normalized.Length && (char.IsDigit(normalized[end]) || normalized[end] == '.'))
+            {
+                end++;
+            }
+
+            normalized = end > 0 ? normalized.Substring(0, end).Trim('.') : normalized;
+            return string.IsNullOrWhiteSpace(normalized) ? "0.0.0" : normalized;
+        }
+
+        private static string GetAgentVersionFromListItem(object? selectedItem)
+        {
+            return selectedItem?.GetType().GetProperty("AgentVersion")?.GetValue(selectedItem)?.ToString() ?? string.Empty;
+        }
+
+        private async Task PromptUpdateAgentIfNeededAsync(string agentId, string agentVersion)
+        {
+            DialogResult result = MessageBox.Show(
+                "Đã có phiên bản AgentSerrvice mới, phiên bản hiện tại đã cũ. Bạn cần update lên phiên bản mới mới có thể tiếp tục thao tác. Bạn có muốn update không?",
+                "Cập nhật Agent",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+
+            if (result == DialogResult.Yes)
+            {
+                await SendAgentUpdateCommandAsync(agentId, agentVersion);
+            }
+        }
+
+        private async Task SendAgentUpdateCommandAsync(string agentId, string currentAgentVersion)
+        {
+            if (!_connectedAgents.TryGetValue(agentId, out var agentInfo) || agentInfo.Client == null || !agentInfo.Client.Connected)
+            {
+                MessageBox.Show("Agent đang offline, không thể gửi lệnh update.", "Cập nhật Agent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            var updateRequest = new
+            {
+                CurrentVersion = NormalizeVersionText(currentAgentVersion),
+                TargetVersion = ControlCurrentVersion,
+                RequestedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+            };
+
+            SocketPacket requestPacket = new SocketPacket
+            {
+                Type = "UPDATE_AGENT",
+                AgentID = agentId,
+                Data = JsonSerializer.Serialize(updateRequest)
+            };
+
+            await SendPacketToAgentAsync(agentId, agentInfo.Client, requestPacket);
+            MessageBox.Show("Đã gửi lệnh update tới Agent.", "Cập nhật Agent", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private async Task SendPacketToAgentAsync(string agentId, TcpClient client, SocketPacket packet)
@@ -2190,6 +2306,7 @@ namespace AgentControl
                 agent["IPAddress"],
                 agent["OSVersion"],
                 agent["AgentID"],
+                agent["AgentVersion"],
                 isOnlineStatus
                 );
             }
@@ -2261,9 +2378,10 @@ namespace AgentControl
             if (ListboxAgents.SelectedItem == null) return;
 
             selectedAgentId = "";
+            var selectedItem = ListboxAgents.SelectedItem;
+            string selectedAgentVersion = GetAgentVersionFromListItem(selectedItem);
             try
             {
-                var selectedItem = ListboxAgents.SelectedItem;
                 var prop = selectedItem.GetType().GetProperty("AgentID");
                 if (prop != null)
                 {
@@ -2271,12 +2389,20 @@ namespace AgentControl
                 }
                 else
                 {
-                    selectedAgentId = selectedItem.ToString();
+                    selectedAgentId = selectedItem.ToString() ?? "";
                 }
             }
             catch { }
 
             if (string.IsNullOrEmpty(selectedAgentId)) return;
+
+            if (_connectedAgents != null &&
+                _connectedAgents.ContainsKey(selectedAgentId) &&
+                IsAgentVersionOlderThanControl(selectedAgentVersion))
+            {
+                await PromptUpdateAgentIfNeededAsync(selectedAgentId, selectedAgentVersion);
+                return;
+            }
 
             tvRemoteFolders.Nodes.Clear();
             lvRemoteFiles.Items.Clear();
