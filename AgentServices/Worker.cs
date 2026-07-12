@@ -466,6 +466,157 @@ namespace AgentService
         }
 
         // Tính năng số 1: Gửi thông tin máy cho Server
+        private async Task SendUploadStatusAsync(
+            string agentId,
+            string uploadId,
+            string remotePath,
+            long uploadedBytes,
+            long totalBytes,
+            string status,
+            string checksumAlgorithm,
+            string errorMessage = "")
+        {
+            var statusPacket = new UploadStatusPacket
+            {
+                UploadID = uploadId,
+                RemotePath = remotePath,
+                UploadedBytes = Math.Max(0, uploadedBytes),
+                TotalBytes = Math.Max(0, totalBytes),
+                Status = status,
+                ChecksumAlgorithm = NormalizeChecksumAlgorithm(checksumAlgorithm),
+                ErrorMessage = errorMessage
+            };
+
+            await SendPacketAsync(new SocketPacket
+            {
+                Type = "UPLOAD_STATUS",
+                AgentID = agentId,
+                Data = JsonSerializer.Serialize(statusPacket)
+            });
+        }
+
+        private async Task HandleBinaryUploadChunkAsync(NetworkStream stream, int frameSize, CancellationToken token)
+        {
+            FileChunkPacket? chunk = null;
+            int bodySize = 0;
+            bool bodyCopyStarted = false;
+            bool bodyCopyCompleted = false;
+
+            try
+            {
+                var binaryFrame = await TransferFrameProtocol.ReadBinaryChunkHeaderAsync(stream, frameSize, token);
+                chunk = binaryFrame.Header;
+                bodySize = binaryFrame.BodySize;
+
+                string agentId = string.IsNullOrWhiteSpace(chunk.AgentID)
+                    ? HardwareInfo.GetUniqueAgentID()
+                    : chunk.AgentID;
+                string uploadId = chunk.DownloadID;
+                string targetPath = chunk.RemotePath;
+                string checksumAlgorithm = NormalizeChecksumAlgorithm(chunk.ChecksumAlgorithm);
+
+                if (string.IsNullOrWhiteSpace(uploadId) || string.IsNullOrWhiteSpace(targetPath))
+                {
+                    await TransferFrameProtocol.DrainExactAsync(stream, bodySize, token);
+                    return;
+                }
+
+                string? targetFolder = Path.GetDirectoryName(targetPath);
+                if (!string.IsNullOrWhiteSpace(targetFolder))
+                {
+                    Directory.CreateDirectory(targetFolder);
+                }
+
+                string tempPath = targetPath + ".uploading";
+                await using (FileStream fs = new FileStream(tempPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, 128 * 1024, FileOptions.Asynchronous))
+                {
+                    if (chunk.Offset <= 0)
+                    {
+                        fs.SetLength(0);
+                    }
+
+                    fs.Seek(chunk.Offset, SeekOrigin.Begin);
+                    bodyCopyStarted = true;
+                    await TransferFrameProtocol.CopyExactToAsync(stream, fs, bodySize, token);
+                    bodyCopyCompleted = true;
+
+                    if (chunk.IsLastChunk && chunk.TotalBytes >= 0)
+                    {
+                        fs.SetLength(chunk.TotalBytes);
+                    }
+
+                    await fs.FlushAsync(token);
+                }
+
+                long currentUploaded = chunk.Offset + bodySize;
+                if (!chunk.IsLastChunk)
+                {
+                    await SendUploadStatusAsync(agentId, uploadId, targetPath, currentUploaded, chunk.TotalBytes, "Uploading", checksumAlgorithm);
+                    return;
+                }
+
+                if (IsChecksumEnabled(checksumAlgorithm))
+                {
+                    await SendUploadStatusAsync(agentId, uploadId, targetPath, currentUploaded, chunk.TotalBytes, "Verifying", checksumAlgorithm);
+
+                    if (string.IsNullOrWhiteSpace(chunk.SourceChecksum) || !File.Exists(tempPath))
+                    {
+                        await SendUploadStatusAsync(agentId, uploadId, targetPath, currentUploaded, chunk.TotalBytes, "ChecksumFailed", checksumAlgorithm, "Khong co checksum de doi chieu.");
+                        return;
+                    }
+
+                    string actualChecksum = await ComputeFileChecksumAsync(tempPath, checksumAlgorithm, token);
+                    if (!string.Equals(actualChecksum, chunk.SourceChecksum, StringComparison.OrdinalIgnoreCase))
+                    {
+                        await SendUploadStatusAsync(agentId, uploadId, targetPath, currentUploaded, chunk.TotalBytes, "ChecksumFailed", checksumAlgorithm, "Checksum khong khop.");
+                        return;
+                    }
+                }
+
+                File.Move(tempPath, targetPath, true);
+                string finalStatus = IsChecksumEnabled(checksumAlgorithm) ? "ChecksumMatched" : "Completed";
+                await SendUploadStatusAsync(agentId, uploadId, targetPath, chunk.TotalBytes, chunk.TotalBytes, finalStatus, checksumAlgorithm);
+            }
+            catch (Exception ex)
+            {
+                if (chunk != null)
+                {
+                    if (!bodyCopyStarted && bodySize > 0)
+                    {
+                        try
+                        {
+                            await TransferFrameProtocol.DrainExactAsync(stream, bodySize, token);
+                        }
+                        catch
+                        {
+                            throw;
+                        }
+                    }
+
+                    string agentId = string.IsNullOrWhiteSpace(chunk.AgentID)
+                        ? HardwareInfo.GetUniqueAgentID()
+                        : chunk.AgentID;
+                    long uploadedBytes = Math.Max(0, chunk.Offset);
+                    try
+                    {
+                        await SendUploadStatusAsync(agentId, chunk.DownloadID, chunk.RemotePath, uploadedBytes, chunk.TotalBytes, "Error", chunk.ChecksumAlgorithm, ex.Message);
+                    }
+                    catch
+                    {
+                        if (bodyCopyStarted && !bodyCopyCompleted)
+                        {
+                            throw;
+                        }
+                    }
+                }
+
+                if (bodyCopyStarted && !bodyCopyCompleted)
+                {
+                    throw;
+                }
+            }
+        }
+
         private static bool IsChecksumEnabled(string? algorithm)
         {
             return string.Equals(algorithm, "MD5", StringComparison.OrdinalIgnoreCase) ||
@@ -780,13 +931,28 @@ namespace AgentService
             {
                 while (_isConnected && !token.IsCancellationRequested && _stream != null)
                 {
-                    int bytesRead = await _stream.ReadAsync(sizeBuffer, 0, 4, token);
+                    int bytesRead = await TransferFrameProtocol.ReadExactOrEndAsync(_stream, sizeBuffer, 0, 4, token);
                     if (bytesRead == 0) break; // Server chủ động ngắt kết nối
 
                     int packetSize = BitConverter.ToInt32(sizeBuffer, 0);
-                    byte[] dataBuffer = new byte[packetSize];
+                    if (packetSize <= 0)
+                    {
+                        throw new InvalidDataException("Invalid packet size.");
+                    }
 
-                    int totalBytesReceived = 0;
+                    byte[] firstByteBuffer = new byte[1];
+                    await TransferFrameProtocol.ReadExactAsync(_stream, firstByteBuffer, 0, 1, token);
+
+                    if (firstByteBuffer[0] == TransferFrameProtocol.BinaryUploadChunkMarker)
+                    {
+                        await HandleBinaryUploadChunkAsync(_stream, packetSize, token);
+                        continue;
+                    }
+
+                    byte[] dataBuffer = new byte[packetSize];
+                    dataBuffer[0] = firstByteBuffer[0];
+
+                    int totalBytesReceived = 1;
                     while (totalBytesReceived < packetSize)
                     {
                         int read = await _stream.ReadAsync(dataBuffer, totalBytesReceived, packetSize - totalBytesReceived, token);
@@ -922,13 +1088,30 @@ namespace AgentService
             {
                 while (_isConnected && !token.IsCancellationRequested && _stream != null)
                 {
-                    int bytesRead = await _stream.ReadAsync(sizeBuffer, 0, 4, token);
+                    int bytesRead = await TransferFrameProtocol.ReadExactOrEndAsync(_stream, sizeBuffer, 0, 4, token);
                     if (bytesRead == 0) break; // Server chủ động ngắt kết nối
 
-                    int packetSize = BitConverter.ToInt32(sizeBuffer, 0);
-                    byte[] dataBuffer = new byte[packetSize];
+                    if (bytesRead != 4) throw new EndOfStreamException("Socket closed before packet size was fully received.");
 
-                    int totalBytesReceived = 0;
+                    int packetSize = BitConverter.ToInt32(sizeBuffer, 0);
+                    if (packetSize <= 0)
+                    {
+                        throw new InvalidDataException("Invalid packet size.");
+                    }
+
+                    byte[] firstByteBuffer = new byte[1];
+                    await TransferFrameProtocol.ReadExactAsync(_stream, firstByteBuffer, 0, 1, token);
+
+                    if (firstByteBuffer[0] == TransferFrameProtocol.BinaryUploadChunkMarker)
+                    {
+                        await HandleBinaryUploadChunkAsync(_stream, packetSize, token);
+                        continue;
+                    }
+
+                    byte[] dataBuffer = new byte[packetSize];
+                    dataBuffer[0] = firstByteBuffer[0];
+
+                    int totalBytesReceived = 1;
                     while (totalBytesReceived < packetSize)
                     {
                         int read = await _stream.ReadAsync(dataBuffer, totalBytesReceived, packetSize - totalBytesReceived, token);

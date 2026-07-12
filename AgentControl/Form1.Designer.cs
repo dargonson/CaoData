@@ -1,6 +1,6 @@
 ﻿namespace AgentControl
 {
-    partial class Form1
+    partial class frmToolBackup
     {
         /// <summary>
         ///  Required designer variable.
@@ -29,8 +29,12 @@
         private void InitializeComponent()
         {
             components = new System.ComponentModel.Container();
-            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(Form1));
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(frmToolBackup));
             panelHeader = new Panel();
+            groupBox1 = new GroupBox();
+            radlistdown = new RadioButton();
+            radlistup = new RadioButton();
+            btnupload = new Button();
             lblver = new Label();
             txtxoa = new TextBox();
             grbchecksum = new GroupBox();
@@ -45,6 +49,7 @@
             ListboxAgents = new NHFUiControls.ListBoxNHF();
             panelZone2 = new Panel();
             tvRemoteFolders = new TreeView();
+            dvgUploads = new DataGridView();
             dgvDownloads = new DataGridView();
             tmrUpdateUI = new System.Windows.Forms.Timer(components);
             lvRemoteFiles = new ListView();
@@ -54,11 +59,12 @@
             ColDate = new ColumnHeader();
             panel1 = new Panel();
             panel2 = new Panel();
-            btnupload = new Button();
             panelHeader.SuspendLayout();
+            groupBox1.SuspendLayout();
             grbchecksum.SuspendLayout();
             panelZone1.SuspendLayout();
             panelZone2.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)dvgUploads).BeginInit();
             ((System.ComponentModel.ISupportInitialize)dgvDownloads).BeginInit();
             panel1.SuspendLayout();
             panel2.SuspendLayout();
@@ -67,6 +73,7 @@
             // panelHeader
             // 
             panelHeader.AutoSize = true;
+            panelHeader.Controls.Add(groupBox1);
             panelHeader.Controls.Add(btnupload);
             panelHeader.Controls.Add(lblver);
             panelHeader.Controls.Add(txtxoa);
@@ -82,14 +89,60 @@
             panelHeader.Size = new Size(1747, 57);
             panelHeader.TabIndex = 0;
             // 
+            // groupBox1
+            // 
+            groupBox1.Controls.Add(radlistdown);
+            groupBox1.Controls.Add(radlistup);
+            groupBox1.Location = new Point(1083, 3);
+            groupBox1.Name = "groupBox1";
+            groupBox1.Size = new Size(371, 48);
+            groupBox1.TabIndex = 8;
+            groupBox1.TabStop = false;
+            groupBox1.Text = "Danh sách file Upload/Download";
+            // 
+            // radlistdown
+            // 
+            radlistdown.AutoSize = true;
+            radlistdown.Location = new Point(200, 21);
+            radlistdown.Name = "radlistdown";
+            radlistdown.Size = new Size(156, 19);
+            radlistdown.TabIndex = 1;
+            radlistdown.TabStop = true;
+            radlistdown.Text = "Danh sách file Download";
+            radlistdown.UseVisualStyleBackColor = true;
+            radlistdown.CheckedChanged += radlistdown_CheckedChanged;
+            // 
+            // radlistup
+            // 
+            radlistup.AutoSize = true;
+            radlistup.Location = new Point(15, 22);
+            radlistup.Name = "radlistup";
+            radlistup.Size = new Size(140, 19);
+            radlistup.TabIndex = 0;
+            radlistup.TabStop = true;
+            radlistup.Text = "Danh sách file Upload";
+            radlistup.UseVisualStyleBackColor = true;
+            radlistup.CheckedChanged += radlistup_CheckedChanged;
+            // 
+            // btnupload
+            // 
+            btnupload.Location = new Point(574, 11);
+            btnupload.Name = "btnupload";
+            btnupload.Size = new Size(124, 42);
+            btnupload.TabIndex = 7;
+            btnupload.Text = "Upload";
+            btnupload.UseVisualStyleBackColor = true;
+            // 
             // lblver
             // 
             lblver.AutoSize = true;
+            lblver.Enabled = false;
             lblver.Location = new Point(1697, 11);
             lblver.Name = "lblver";
             lblver.Size = new Size(38, 15);
             lblver.TabIndex = 6;
             lblver.Text = "label1";
+            lblver.Visible = false;
             // 
             // txtxoa
             // 
@@ -234,6 +287,15 @@
             tvRemoteFolders.BeforeExpand += tvRemoteFolders_BeforeExpand;
             tvRemoteFolders.AfterSelect += tvRemoteFolders_AfterSelect;
             // 
+            // dvgUploads
+            // 
+            dvgUploads.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            dvgUploads.Dock = DockStyle.Fill;
+            dvgUploads.Location = new Point(0, 0);
+            dvgUploads.Name = "dvgUploads";
+            dvgUploads.Size = new Size(693, 604);
+            dvgUploads.TabIndex = 8;
+            // 
             // dgvDownloads
             // 
             dgvDownloads.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
@@ -292,6 +354,7 @@
             // 
             // panel2
             // 
+            panel2.Controls.Add(dvgUploads);
             panel2.Controls.Add(dgvDownloads);
             panel2.Dock = DockStyle.Fill;
             panel2.Location = new Point(1054, 57);
@@ -299,16 +362,7 @@
             panel2.Size = new Size(693, 604);
             panel2.TabIndex = 6;
             // 
-            // btnupload
-            // 
-            btnupload.Location = new Point(574, 11);
-            btnupload.Name = "btnupload";
-            btnupload.Size = new Size(124, 42);
-            btnupload.TabIndex = 7;
-            btnupload.Text = "Upload";
-            btnupload.UseVisualStyleBackColor = true;
-            // 
-            // Form1
+            // frmToolBackup
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
@@ -319,15 +373,18 @@
             Controls.Add(panelZone1);
             Controls.Add(panelHeader);
             Icon = (Icon)resources.GetObject("$this.Icon");
-            Name = "Form1";
+            Name = "frmToolBackup";
             Text = "Tool Backup";
             Load += Form1_Load;
             panelHeader.ResumeLayout(false);
             panelHeader.PerformLayout();
+            groupBox1.ResumeLayout(false);
+            groupBox1.PerformLayout();
             grbchecksum.ResumeLayout(false);
             grbchecksum.PerformLayout();
             panelZone1.ResumeLayout(false);
             panelZone2.ResumeLayout(false);
+            ((System.ComponentModel.ISupportInitialize)dvgUploads).EndInit();
             ((System.ComponentModel.ISupportInitialize)dgvDownloads).EndInit();
             panel1.ResumeLayout(false);
             panel2.ResumeLayout(false);
@@ -367,5 +424,9 @@
         private TextBox txtxoa;
         private Label lblver;
         private Button btnupload;
+        private GroupBox groupBox1;
+        private RadioButton radlistdown;
+        private RadioButton radlistup;
+        private DataGridView dvgUploads;
     }
 }

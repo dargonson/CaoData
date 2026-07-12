@@ -11,7 +11,7 @@ using System.Text.Json; // ⬅️ Thêm mới
 
 namespace AgentControl
 {
-    public partial class Form1 : Form
+    public partial class frmToolBackup : Form
     {
         private const string ControlCurrentVersion = AppVersion.CurrentVersionControl;
 
@@ -21,8 +21,10 @@ namespace AgentControl
         // Quản lý danh sách kết nối: key là AgentID, Value gồm TcpClient và thời gian LastSeen
         private ConcurrentDictionary<string, (TcpClient Client, DateTime LastSeen)> _connectedAgents = new ConcurrentDictionary<string, (TcpClient, DateTime)>();
         private ConcurrentDictionary<string, (long Bytes, DateTime Time)> _downloadSpeedTracker = new ConcurrentDictionary<string, (long, DateTime)>();
+        private ConcurrentDictionary<string, (long Bytes, DateTime Time)> _uploadSpeedTracker = new ConcurrentDictionary<string, (long, DateTime)>();
         private ConcurrentDictionary<string, string> _downloadLocalPathCache = new ConcurrentDictionary<string, string>();
         private ConcurrentDictionary<string, DateTime> _downloadDbUpdateTracker = new ConcurrentDictionary<string, DateTime>();
+        private ConcurrentDictionary<string, TaskCompletionSource<UploadStatusPacket>> _pendingUploadCompletions = new ConcurrentDictionary<string, TaskCompletionSource<UploadStatusPacket>>();
         private ConcurrentDictionary<string, SemaphoreSlim> _agentSendLocks = new ConcurrentDictionary<string, SemaphoreSlim>();
         private ConcurrentDictionary<string, string> _pendingDirectoryRequests = new ConcurrentDictionary<string, string>();
         private ConcurrentDictionary<string, TaskCompletionSource<RemoteFolderFilesResponse>> _pendingFolderFileRequests = new ConcurrentDictionary<string, TaskCompletionSource<RemoteFolderFilesResponse>>();
@@ -30,13 +32,15 @@ namespace AgentControl
         private Dictionary<string, AgentUpdateStatusForm> _agentUpdateStatusForms = new Dictionary<string, AgentUpdateStatusForm>(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> _activeDownloadBatchIds = new HashSet<string>();
         private bool _activeDownloadBatchNotified = true;
+        private bool _isUploadRunning = false;
         private bool _isDownloadGridRefreshing = false;
         private DateTime _lastUiUpdate = DateTime.MinValue;
         private Font? _downloadStatusBoldFont;
-        public Form1()
+        public frmToolBackup()
         {
             InitializeComponent();
             InitializeControlVersionLabel();
+            btnupload.Click += btnupload_Click;
             ListboxAgents.AgentDeleteClicked += ListboxAgents_AgentDeleteClicked;
             lvRemoteFiles.View = View.Details;// Đảm bảo ListView hiển thị dạng bảng và có cột lúc chạy
         }
@@ -90,6 +94,24 @@ namespace AgentControl
                 RemotePath = remotePath;
                 LocalPath = localPath;
                 TotalBytes = Math.Max(0, totalBytes);
+            }
+        }
+
+        private sealed class UploadFilePlan
+        {
+            public string UploadID { get; }
+            public string LocalPath { get; }
+            public string RemotePath { get; }
+            public long TotalBytes { get; }
+            public string ChecksumAlgorithm { get; }
+
+            public UploadFilePlan(string localPath, string remotePath, long totalBytes, string checksumAlgorithm)
+            {
+                UploadID = Guid.NewGuid().ToString();
+                LocalPath = localPath;
+                RemotePath = remotePath;
+                TotalBytes = Math.Max(0, totalBytes);
+                ChecksumAlgorithm = NormalizeChecksumAlgorithm(checksumAlgorithm);
             }
         }
 
@@ -612,11 +634,32 @@ namespace AgentControl
             // 6. Cột Trạng Thái
             dgvDownloads.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Trạng Thái", Width = 205 }); // [cite: 13, 14]
         }
+        private void InitUploadGrid()
+        {
+            dvgUploads.Columns.Clear();
+            dvgUploads.AutoGenerateColumns = false;
+            dvgUploads.AllowUserToAddRows = false;
+            dvgUploads.ReadOnly = true;
+            dvgUploads.RowHeadersVisible = false;
+            dvgUploads.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            typeof(DataGridView).GetProperty("DoubleBuffered", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.SetValue(dvgUploads, true, null);
+            dvgUploads.CellPainting -= dgvDownloads_CellPainting;
+            dvgUploads.CellPainting += dgvDownloads_CellPainting;
+
+            dvgUploads.Columns.Add(new DataGridViewTextBoxColumn { Name = "UploadID", HeaderText = "Mã Tải", Visible = false });
+            dvgUploads.Columns.Add(new DataGridViewTextBoxColumn { Name = "FileName", HeaderText = "Tên Tập Tin", Width = 200, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
+            dvgUploads.Columns.Add(new DataGridViewTextBoxColumn { Name = "TotalSize", HeaderText = "Dung Lượng", Width = 68 });
+            dvgUploads.Columns.Add(new DataGridViewProgressBarColumn { Name = "Progress", HeaderText = "Tiến Độ", Width = 120 });
+            dvgUploads.Columns.Add(new DataGridViewTextBoxColumn { Name = "Speed", HeaderText = "Tốc Độ", Width = 78 });
+            dvgUploads.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Trạng Thái", Width = 205 });
+        }
+
         private void dgvDownloads_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
         {
+            DataGridView grid = sender as DataGridView ?? dgvDownloads;
             if (e.RowIndex < 0 ||
                 e.ColumnIndex < 0 ||
-                dgvDownloads.Columns[e.ColumnIndex].Name != "Status")
+                grid.Columns[e.ColumnIndex].Name != "Status")
             {
                 return;
             }
@@ -631,7 +674,7 @@ namespace AgentControl
 
             e.Paint(e.CellBounds, DataGridViewPaintParts.Background | DataGridViewPaintParts.Border | DataGridViewPaintParts.SelectionBackground);
 
-            _downloadStatusBoldFont ??= new Font(dgvDownloads.Font, FontStyle.Bold);
+            _downloadStatusBoldFont ??= new Font(grid.Font, FontStyle.Bold);
             Font drawFont = _downloadStatusBoldFont;
             Rectangle bounds = e.CellBounds;
             int x = bounds.Left + 6;
@@ -657,7 +700,15 @@ namespace AgentControl
 
         private async void Form1_Load(object sender, EventArgs e)
         {
+
+            this.Text="Tool Backup - ver " + ControlCurrentVersion;
             InitDownloadGrid();
+            InitUploadGrid();
+            if (!radlistdown.Checked && !radlistup.Checked)
+            {
+                radlistdown.Checked = true;
+            }
+            UpdateTransferGridVisibility();
             if (!radmd5.Checked && !radsha256.Checked && !radnone.Checked)
             {
                 radnone.Checked = true;
@@ -1285,6 +1336,22 @@ namespace AgentControl
                                     }
                                 }
                             }
+                            else if (packet.Type == "UPLOAD_STATUS")
+                            {
+                                if (!string.IsNullOrEmpty(packet.Data))
+                                {
+                                    var status = JsonSerializer.Deserialize<UploadStatusPacket>(packet.Data);
+                                    if (status != null)
+                                    {
+                                        ApplyUploadStatus(status);
+                                        if (IsDownloadTerminalStatus(status.Status) &&
+                                            _pendingUploadCompletions.TryRemove(status.UploadID, out var completion))
+                                        {
+                                            completion.TrySetResult(status);
+                                        }
+                                    }
+                                }
+                            }
                             else if (packet.Type == "REGISTER")
                             {
                                 var info = System.Text.Json.JsonSerializer.Deserialize<AgentInfo>(packet.Data);
@@ -1868,6 +1935,42 @@ namespace AgentControl
             return changed;
         }
 
+        private bool ApplyUploadRowStyle(DataGridViewRow row, string status, string checksumAlgorithm)
+        {
+            bool changed = false;
+            DataGridViewCell statusCell = row.Cells["Status"];
+            statusCell.Style.Font = null;
+            statusCell.Style.ForeColor = dvgUploads.DefaultCellStyle.ForeColor;
+            changed |= SetCellValueIfChanged(statusCell, GetChecksumDisplayStatus(status, checksumAlgorithm));
+
+            if (status.Equals("Error", StringComparison.OrdinalIgnoreCase))
+            {
+                changed |= SetCellValueIfChanged(row.Cells["Progress"], 0);
+                changed |= SetCellValueIfChanged(statusCell, "✖ Error");
+                statusCell.Style.ForeColor = Color.FromArgb(220, 53, 69);
+                _downloadStatusBoldFont ??= new Font(dvgUploads.Font, FontStyle.Bold);
+                statusCell.Style.Font = _downloadStatusBoldFont;
+            }
+            else if (status.Equals("Completed", StringComparison.OrdinalIgnoreCase))
+            {
+                changed |= SetCellValueIfChanged(row.Cells["Progress"], 100);
+                changed |= SetCellValueIfChanged(statusCell, "Done");
+                statusCell.Style.ForeColor = Color.FromArgb(25, 135, 84);
+                _downloadStatusBoldFont ??= new Font(dvgUploads.Font, FontStyle.Bold);
+                statusCell.Style.Font = _downloadStatusBoldFont;
+            }
+            else if (IsChecksumMatchedStatus(status) || IsChecksumFailedStatus(status))
+            {
+                changed |= SetCellValueIfChanged(row.Cells["Progress"], 100);
+                changed |= SetCellValueIfChanged(statusCell, GetChecksumDisplayStatus(status, checksumAlgorithm));
+                statusCell.Style.ForeColor = IsChecksumFailedStatus(status) ? Color.FromArgb(220, 53, 69) : dvgUploads.DefaultCellStyle.ForeColor;
+                _downloadStatusBoldFont ??= new Font(dvgUploads.Font, FontStyle.Bold);
+                statusCell.Style.Font = _downloadStatusBoldFont;
+            }
+
+            return changed;
+        }
+
         private bool SetCellValueIfChanged(DataGridViewCell cell, object value)
         {
             if (Equals(cell.Value, value))
@@ -1919,6 +2022,142 @@ namespace AgentControl
 
             dgvDownloads.Refresh();
             dgvDownloads.Update();
+        }
+
+        private DataGridViewRow? FindUploadRow(string uploadId)
+        {
+            foreach (DataGridViewRow row in dvgUploads.Rows)
+            {
+                string rowUploadId = row.Cells["UploadID"].Value?.ToString() ?? string.Empty;
+                if (string.Equals(rowUploadId, uploadId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return row;
+                }
+            }
+
+            return null;
+        }
+
+        private void AddOrUpdateUploadRow(UploadFilePlan file, long uploadedBytes, string status, string speedText)
+        {
+            if (dvgUploads.InvokeRequired)
+            {
+                dvgUploads.BeginInvoke(new Action(() => AddOrUpdateUploadRow(file, uploadedBytes, status, speedText)));
+                return;
+            }
+
+            DataGridViewRow? row = FindUploadRow(file.UploadID);
+            dvgUploads.SuspendLayout();
+            if (row == null)
+            {
+                int rowIndex = dvgUploads.Rows.Add();
+                row = dvgUploads.Rows[rowIndex];
+                row.Cells["UploadID"].Value = file.UploadID;
+            }
+
+            int progressPercent = 0;
+            if (file.TotalBytes > 0)
+            {
+                progressPercent = (int)Math.Min(100, Math.Max(0, uploadedBytes * 100 / file.TotalBytes));
+            }
+            if (IsDownloadTerminalStatus(status))
+            {
+                progressPercent = status.Equals("Error", StringComparison.OrdinalIgnoreCase) ? 0 : 100;
+            }
+
+            bool rowChanged = false;
+            rowChanged |= SetCellValueIfChanged(row.Cells["FileName"], Path.GetFileName(file.LocalPath));
+            rowChanged |= SetCellValueIfChanged(row.Cells["TotalSize"], convertFormatSize(file.TotalBytes));
+            rowChanged |= SetCellValueIfChanged(row.Cells["Progress"], progressPercent);
+            rowChanged |= SetCellValueIfChanged(row.Cells["Speed"], speedText);
+            rowChanged |= ApplyUploadRowStyle(row, status, file.ChecksumAlgorithm);
+            if (rowChanged)
+            {
+                dvgUploads.InvalidateRow(row.Index);
+            }
+
+            dvgUploads.ResumeLayout();
+            try
+            {
+                dvgUploads.FirstDisplayedScrollingRowIndex = row.Index;
+            }
+            catch { }
+        }
+
+        private void ApplyUploadStatus(UploadStatusPacket status)
+        {
+            if (dvgUploads.InvokeRequired)
+            {
+                dvgUploads.BeginInvoke(new Action(() => ApplyUploadStatus(status)));
+                return;
+            }
+
+            DataGridViewRow? row = FindUploadRow(status.UploadID);
+            if (row == null)
+            {
+                return;
+            }
+
+            string checksumAlgorithm = NormalizeChecksumAlgorithm(status.ChecksumAlgorithm);
+            string speedText = status.Status.Equals("Uploading", StringComparison.OrdinalIgnoreCase)
+                ? row.Cells["Speed"].Value?.ToString() ?? "0 B/s"
+                : "0 B/s";
+
+            int progressPercent = 0;
+            if (status.TotalBytes > 0)
+            {
+                progressPercent = (int)Math.Min(100, Math.Max(0, status.UploadedBytes * 100 / status.TotalBytes));
+            }
+
+            if (IsDownloadTerminalStatus(status.Status))
+            {
+                progressPercent = status.Status.Equals("Error", StringComparison.OrdinalIgnoreCase) ? 0 : 100;
+            }
+
+            bool rowChanged = false;
+            rowChanged |= SetCellValueIfChanged(row.Cells["Progress"], progressPercent);
+            rowChanged |= SetCellValueIfChanged(row.Cells["Speed"], speedText);
+            rowChanged |= ApplyUploadRowStyle(row, status.Status, checksumAlgorithm);
+            if (rowChanged)
+            {
+                dvgUploads.InvalidateRow(row.Index);
+            }
+        }
+
+        private void SetTransferListLock(bool isLocked, bool uploadMode)
+        {
+            radlistdown.Enabled = !isLocked;
+            radlistup.Enabled = !isLocked;
+            if (uploadMode)
+            {
+                radlistup.Checked = true;
+            }
+            else
+            {
+                radlistdown.Checked = true;
+            }
+
+            UpdateTransferGridVisibility();
+        }
+
+        private async Task SendUploadChunkAsync(string agentId, TcpClient client, FileChunkPacket chunk, byte[] buffer, int count, CancellationToken token)
+        {
+            if (client == null || !client.Connected)
+            {
+                throw new IOException("Agent socket is not connected.");
+            }
+
+            SemaphoreSlim sendLock = _agentSendLocks.GetOrAdd(agentId, _ => new SemaphoreSlim(1, 1));
+            await sendLock.WaitAsync(token);
+            try
+            {
+                NetworkStream stream = client.GetStream();
+                await TransferFrameProtocol.WriteBinaryUploadChunkAsync(stream, chunk, buffer, count, token);
+            }
+            finally
+            {
+                sendLock.Release();
+            }
         }
 
         private bool IsFolderItem(ListViewItem item)
@@ -2366,7 +2605,7 @@ namespace AgentControl
             if (agent.IsOnline || isStillConnected)
             {
                 MessageBox.Show(
-                    
+
                     "Agent đang online, vui lòng ngắt kết nối hoặc cho Agent offline trước khi xoá thông tin.",
                     "Cảnh báo",
                     MessageBoxButtons.OK,
@@ -2591,6 +2830,230 @@ namespace AgentControl
             return downloadId;
         }
 
+        private static System.Security.Cryptography.HashAlgorithmName GetHashAlgorithmName(string algorithm)
+        {
+            return string.Equals(NormalizeChecksumAlgorithm(algorithm), "MD5", StringComparison.OrdinalIgnoreCase)
+                ? System.Security.Cryptography.HashAlgorithmName.MD5
+                : System.Security.Cryptography.HashAlgorithmName.SHA256;
+        }
+
+        private string CalculateUploadSpeed(string uploadId, long uploadedBytes)
+        {
+            DateTime now = DateTime.Now;
+            string speedText = "0 B/s";
+            if (_uploadSpeedTracker.TryGetValue(uploadId, out var previous))
+            {
+                double seconds = (now - previous.Time).TotalSeconds;
+                long deltaBytes = uploadedBytes - previous.Bytes;
+                long bytesPerSecond = seconds > 0 ? (long)(Math.Max(0, deltaBytes) / seconds) : 0;
+                speedText = FormatSpeed(bytesPerSecond);
+            }
+
+            _uploadSpeedTracker[uploadId] = (uploadedBytes, now);
+            return speedText;
+        }
+
+        private async Task<UploadStatusPacket> UploadSingleFileAsync(string agentId, TcpClient client, UploadFilePlan file)
+        {
+            var completion = new TaskCompletionSource<UploadStatusPacket>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pendingUploadCompletions[file.UploadID] = completion;
+
+            try
+            {
+                AddOrUpdateUploadRow(file, 0, "Uploading", "0 B/s");
+
+                const int bufferSize = 1024 * 1024;
+                byte[] buffer = new byte[bufferSize];
+                long totalBytes = file.TotalBytes;
+                long offset = 0;
+                string checksumAlgorithm = NormalizeChecksumAlgorithm(file.ChecksumAlgorithm);
+                System.Security.Cryptography.IncrementalHash? hasher = IsChecksumEnabled(checksumAlgorithm)
+                    ? System.Security.Cryptography.IncrementalHash.CreateHash(GetHashAlgorithmName(checksumAlgorithm))
+                    : null;
+
+                try
+                {
+                    await using FileStream fs = new FileStream(file.LocalPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, bufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+                    if (totalBytes == 0)
+                    {
+                        string sourceChecksum = string.Empty;
+                        if (hasher != null)
+                        {
+                            sourceChecksum = Convert.ToHexString(hasher.GetHashAndReset());
+                        }
+
+                        var emptyChunk = new FileChunkPacket
+                        {
+                            AgentID = agentId,
+                            DownloadID = file.UploadID,
+                            RemotePath = file.RemotePath,
+                            TotalBytes = 0,
+                            Offset = 0,
+                            ChunkSize = 0,
+                            IsLastChunk = true,
+                            ChecksumAlgorithm = checksumAlgorithm,
+                            SourceChecksum = sourceChecksum
+                        };
+
+                        await SendUploadChunkAsync(agentId, client, emptyChunk, Array.Empty<byte>(), 0, CancellationToken.None);
+                    }
+                    else
+                    {
+                        int bytesRead;
+                        while ((bytesRead = await fs.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                        {
+                            bool isLastChunk = offset + bytesRead >= totalBytes;
+                            string sourceChecksum = string.Empty;
+                            if (hasher != null)
+                            {
+                                hasher.AppendData(buffer, 0, bytesRead);
+                                if (isLastChunk)
+                                {
+                                    sourceChecksum = Convert.ToHexString(hasher.GetHashAndReset());
+                                }
+                            }
+
+                            var chunk = new FileChunkPacket
+                            {
+                                AgentID = agentId,
+                                DownloadID = file.UploadID,
+                                RemotePath = file.RemotePath,
+                                TotalBytes = totalBytes,
+                                Offset = offset,
+                                ChunkSize = bytesRead,
+                                IsLastChunk = isLastChunk,
+                                ChecksumAlgorithm = checksumAlgorithm,
+                                SourceChecksum = sourceChecksum
+                            };
+
+                            await SendUploadChunkAsync(agentId, client, chunk, buffer, bytesRead, CancellationToken.None);
+
+                            offset += bytesRead;
+                            string localStatus = isLastChunk && IsChecksumEnabled(checksumAlgorithm) ? "Verifying" : "Uploading";
+                            AddOrUpdateUploadRow(file, offset, localStatus, CalculateUploadSpeed(file.UploadID, offset));
+                            await Task.Yield();
+                        }
+                    }
+                }
+                finally
+                {
+                    hasher?.Dispose();
+                }
+
+                UploadStatusPacket finalStatus = await completion.Task.WaitAsync(TimeSpan.FromMinutes(5));
+                _uploadSpeedTracker.TryRemove(file.UploadID, out _);
+                return finalStatus;
+            }
+            catch (Exception ex)
+            {
+                _pendingUploadCompletions.TryRemove(file.UploadID, out _);
+                _uploadSpeedTracker.TryRemove(file.UploadID, out _);
+                AddOrUpdateUploadRow(file, 0, "Error", "0 B/s");
+                return new UploadStatusPacket
+                {
+                    UploadID = file.UploadID,
+                    RemotePath = file.RemotePath,
+                    TotalBytes = file.TotalBytes,
+                    UploadedBytes = 0,
+                    Status = "Error",
+                    ChecksumAlgorithm = file.ChecksumAlgorithm,
+                    ErrorMessage = ex.Message
+                };
+            }
+        }
+
+        private async void btnupload_Click(object? sender, EventArgs e)
+        {
+            if (_isUploadRunning)
+            {
+                return;
+            }
+
+            if (!TryGetRemoteNodeTag(tvRemoteFolders.SelectedNode, out RemoteNodeTag? remoteTag) || remoteTag == null)
+            {
+                MessageBox.Show("Vui lòng chọn thư mục đích trên Agent trước khi upload.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string uploadAgentId = remoteTag.AgentId;
+            if (!_connectedAgents.TryGetValue(uploadAgentId, out var agentInfo) || agentInfo.Client == null || !agentInfo.Client.Connected)
+            {
+                MessageBox.Show("Agent đang offline hoặc chưa kết nối.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            using OpenFileDialog ofd = new OpenFileDialog
+            {
+                Title = "Chọn file để upload xuống Agent",
+                Multiselect = true,
+                CheckFileExists = true
+            };
+
+            if (ofd.ShowDialog() != DialogResult.OK || ofd.FileNames.Length == 0)
+            {
+                return;
+            }
+
+            string checksumAlgorithm = GetSelectedChecksumAlgorithm();
+            string remoteFolder = NormalizeRemotePath(remoteTag.RemotePath);
+            var uploadFiles = new List<UploadFilePlan>();
+            foreach (string localPath in ofd.FileNames)
+            {
+                long totalBytes = 0;
+                try
+                {
+                    totalBytes = new FileInfo(localPath).Length;
+                }
+                catch { }
+
+                string remotePath = Path.Combine(remoteFolder, Path.GetFileName(localPath));
+                uploadFiles.Add(new UploadFilePlan(localPath, remotePath, totalBytes, checksumAlgorithm));
+            }
+
+            _isUploadRunning = true;
+            SetTransferListLock(true, uploadMode: true);
+            btnupload.Enabled = false;
+            btnCopy.Enabled = false;
+
+            int successCount = 0;
+            int errorCount = 0;
+            try
+            {
+                foreach (UploadFilePlan file in uploadFiles)
+                {
+                    AddOrUpdateUploadRow(file, 0, "Waiting", "0 B/s");
+                }
+
+                foreach (UploadFilePlan file in uploadFiles)
+                {
+                    UploadStatusPacket result = await UploadSingleFileAsync(uploadAgentId, agentInfo.Client, file);
+                    if (result.Status.Equals("Completed", StringComparison.OrdinalIgnoreCase) || IsChecksumMatchedStatus(result.Status))
+                    {
+                        successCount++;
+                    }
+                    else
+                    {
+                        errorCount++;
+                    }
+                }
+
+                await RequestRemoteDirectoryAsync(remoteTag);
+                MessageBox.Show(
+                    $"Đã hoàn tất upload.\nThành công: {successCount}\nLỗi: {errorCount}",
+                    "Thông báo",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+            finally
+            {
+                _isUploadRunning = false;
+                btnupload.Enabled = true;
+                btnCopy.Enabled = true;
+                SetTransferListLock(false, uploadMode: true);
+            }
+        }
+
         private async void btnCopy_Click(object sender, EventArgs e)
         {
             // 1. Kiểm tra xem người dùng đã chọn Agent chưa
@@ -2728,6 +3191,7 @@ namespace AgentControl
 
                 _activeDownloadBatchIds = batchIds;
                 _activeDownloadBatchNotified = false;
+                SetTransferListLock(true, uploadMode: false);
 
                 if (skippedFolders > 0)
                 {
@@ -2753,6 +3217,41 @@ namespace AgentControl
             btncleardrv.Enabled = false;
             try
             {
+                if (radlistup.Checked)
+                {
+                    if (_isUploadRunning)
+                    {
+                        MessageBox.Show("Đang upload, vui lòng chờ hoàn tất rồi clear danh sách.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+
+                    if (dvgUploads.SelectedRows.Count == 0)
+                    {
+                        dvgUploads.Rows.Clear();
+                        _uploadSpeedTracker.Clear();
+                        _pendingUploadCompletions.Clear();
+                        return;
+                    }
+
+                    for (int i = dvgUploads.SelectedRows.Count - 1; i >= 0; i--)
+                    {
+                        DataGridViewRow row = dvgUploads.SelectedRows[i];
+                        string uploadId = row.Cells["UploadID"].Value?.ToString() ?? string.Empty;
+                        if (!string.IsNullOrWhiteSpace(uploadId))
+                        {
+                            _uploadSpeedTracker.TryRemove(uploadId, out _);
+                            _pendingUploadCompletions.TryRemove(uploadId, out _);
+                        }
+
+                        if (!row.IsNewRow)
+                        {
+                            dvgUploads.Rows.Remove(row);
+                        }
+                    }
+
+                    return;
+                }
+
                 var selectedDownloadIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (DataGridViewRow row in dgvDownloads.SelectedRows)
                 {
@@ -2957,6 +3456,7 @@ namespace AgentControl
                     {
                         _activeDownloadBatchNotified = true;
                         _activeDownloadBatchIds.Clear();
+                        SetTransferListLock(false, uploadMode: false);
 
                         MessageBox.Show(
                             $"Đã hoàn tất tải xuống.\nThành công: {completedCount}\nLỗi: {errorCount}",
@@ -2975,6 +3475,29 @@ namespace AgentControl
                 }
                 _isDownloadGridRefreshing = false;
             }
+        }
+
+        private void radlistup_CheckedChanged(object sender, EventArgs e)
+        {
+            UpdateTransferGridVisibility();
+        }
+
+        private void radlistdown_CheckedChanged(object sender, EventArgs e)
+        {
+            UpdateTransferGridVisibility();
+        }
+
+        private void UpdateTransferGridVisibility()
+        {
+            if (_isUploadRunning)
+            {
+                dgvDownloads.Visible = false;
+                dvgUploads.Visible = true;
+                return;
+            }
+
+            dgvDownloads.Visible = radlistdown.Checked;
+            dvgUploads.Visible = radlistup.Checked;
         }
     }
 }
