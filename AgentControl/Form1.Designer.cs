@@ -54,6 +54,7 @@
             ColDate = new ColumnHeader();
             panel1 = new Panel();
             panel2 = new Panel();
+            btnupload = new Button();
             panelHeader.SuspendLayout();
             grbchecksum.SuspendLayout();
             panelZone1.SuspendLayout();
@@ -66,6 +67,7 @@
             // panelHeader
             // 
             panelHeader.AutoSize = true;
+            panelHeader.Controls.Add(btnupload);
             panelHeader.Controls.Add(lblver);
             panelHeader.Controls.Add(txtxoa);
             panelHeader.Controls.Add(grbchecksum);
@@ -91,7 +93,7 @@
             // 
             // txtxoa
             // 
-            txtxoa.Location = new Point(574, 3);
+            txtxoa.Location = new Point(761, 0);
             txtxoa.Name = "txtxoa";
             txtxoa.Size = new Size(139, 23);
             txtxoa.TabIndex = 5;
@@ -143,7 +145,7 @@
             // 
             // btncleardrv
             // 
-            btncleardrv.Location = new Point(746, 12);
+            btncleardrv.Location = new Point(933, 9);
             btncleardrv.Name = "btncleardrv";
             btncleardrv.Size = new Size(112, 42);
             btncleardrv.TabIndex = 3;
@@ -167,13 +169,13 @@
             btnCopy.Name = "btnCopy";
             btnCopy.Size = new Size(124, 42);
             btnCopy.TabIndex = 1;
-            btnCopy.Text = "Copy";
+            btnCopy.Text = "Download";
             btnCopy.UseVisualStyleBackColor = true;
             btnCopy.Click += btnCopy_Click;
             // 
             // brndel
             // 
-            brndel.Location = new Point(574, 29);
+            brndel.Location = new Point(761, 26);
             brndel.Name = "brndel";
             brndel.Size = new Size(139, 25);
             brndel.TabIndex = 0;
@@ -297,6 +299,15 @@
             panel2.Size = new Size(693, 604);
             panel2.TabIndex = 6;
             // 
+            // btnupload
+            // 
+            btnupload.Location = new Point(574, 11);
+            btnupload.Name = "btnupload";
+            btnupload.Size = new Size(124, 42);
+            btnupload.TabIndex = 7;
+            btnupload.Text = "Upload";
+            btnupload.UseVisualStyleBackColor = true;
+            // 
             // Form1
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
@@ -355,5 +366,6 @@
         private DataGridViewTextBoxColumn D;
         private TextBox txtxoa;
         private Label lblver;
+        private Button btnupload;
     }
 }

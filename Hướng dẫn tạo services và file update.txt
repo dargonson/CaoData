@@ -1,0 +1,45 @@
+I. Để thay đổi đường dẫn File AgentUpdater: vào AppVersion.cs dòng public const string AgentUpdateRootDirectory = @"C:\ProgramData\Intel\Driver\Updates";
+II. Để tạo file Update cho AgentService tại máy Client làm như sau
+1. vào AppVersion.cs chỉnh version Control và Agent giống nhau
+2. Sau đó rebuild dạng release cho cả Solution
+3. Tiếp theo mở PowerShell trỏ về thư mục gốc chứ 5 thư mục AgentControl, AgentServices, AgentShared, AgentUpdater và Agent NHFUiControls
+4. Sau đó chạy script sau:
+
+$rid = "win-x64"
+$updateDir = ".\AgentControl\Updates\AgentServices"
+
+dotnet publish .\AgentServices\AgentServices.csproj -c Release -r $rid --self-contained true `
+  -p:PublishSingleFile=true `
+  -p:EnableCompressionInSingleFile=true `
+  -p:IncludeNativeLibrariesForSelfExtract=true `
+  -p:DebugType=None `
+  -p:DebugSymbols=false
+
+dotnet publish .\AgentUpdater\AgentUpdater.csproj -c Release -r $rid --self-contained true `
+  -p:PublishSingleFile=true `
+  -p:EnableCompressionInSingleFile=true `
+  -p:IncludeNativeLibrariesForSelfExtract=true `
+  -p:DebugType=None `
+  -p:DebugSymbols=false
+
+New-Item -ItemType Directory -Force -Path $updateDir | Out-Null
+
+Copy-Item ".\AgentServices\bin\Release\net8.0-windows\$rid\publish\AgentServices.exe" "$updateDir\AgentServices.exe" -Force
+Copy-Item ".\AgentUpdater\bin\Release\net8.0-windows\$rid\publish\AgentUpdater.exe" "$updateDir\AgentUpdater.exe" -Force
+
+Get-ChildItem $updateDir
+
+5. tại máy Agent, nếu cài lần đầu thì copy file AgentServices.exe nằm ở đường dẫn AgentControl\Updates\AgentServices vào thư mục an toàn bất kì. thư mục này sau này dùng để chạy luôn, không thay đổi và kèm theo file appsetting.json (tạo bằng tay hoặc copy từ debug hoặc release_ có nội dung sau
+{
+  "ConnectionConfig": {
+    "ServerLAN": "172.16.17.18",
+    "ServerWAN": "14.161.49.76",
+    "Port": 9000,
+    "ConnectionTimeoutMs": 8000,
+    "AgentID": ""
+  }
+}
+6. tạo services bằng lệnh sc.exe create AgentServices binPath= "Đường dẫn tới file AgentServices.exe" start= auto
+7. Như vậy là xong, đã có thể update rồi
+
+
