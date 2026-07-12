@@ -117,6 +117,12 @@ namespace AgentShared
         public string FullPath { get; set; } = string.Empty;
     }
 
+    public class RemoteCreateDirectoryRequest
+    {
+        public string RequestID { get; set; } = string.Empty;
+        public string FullPath { get; set; } = string.Empty;
+    }
+
     public class RemoteFileActionResponse
     {
         public string RequestID { get; set; } = string.Empty;

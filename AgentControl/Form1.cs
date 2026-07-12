@@ -29,6 +29,11 @@ namespace AgentControl
         private ConcurrentDictionary<string, string> _pendingDirectoryRequests = new ConcurrentDictionary<string, string>();
         private ConcurrentDictionary<string, TaskCompletionSource<RemoteFolderFilesResponse>> _pendingFolderFileRequests = new ConcurrentDictionary<string, TaskCompletionSource<RemoteFolderFilesResponse>>();
         private ConcurrentDictionary<string, TaskCompletionSource<RemoteFileActionResponse>> _pendingRemoteActionRequests = new ConcurrentDictionary<string, TaskCompletionSource<RemoteFileActionResponse>>();
+        private readonly List<UploadFilePlan> _queuedUploadFiles = new List<UploadFilePlan>();
+        private readonly HashSet<string> _queuedUploadDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly List<string> _queuedUploadScanErrors = new List<string>();
+        private string _queuedUploadAgentId = string.Empty;
+        private string _queuedUploadRemoteFolder = string.Empty;
         private Dictionary<string, AgentUpdateStatusForm> _agentUpdateStatusForms = new Dictionary<string, AgentUpdateStatusForm>(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> _activeDownloadBatchIds = new HashSet<string>();
         private bool _activeDownloadBatchNotified = true;
@@ -102,14 +107,16 @@ namespace AgentControl
             public string UploadID { get; }
             public string LocalPath { get; }
             public string RemotePath { get; }
+            public string DisplayName { get; }
             public long TotalBytes { get; }
             public string ChecksumAlgorithm { get; }
 
-            public UploadFilePlan(string localPath, string remotePath, long totalBytes, string checksumAlgorithm)
+            public UploadFilePlan(string localPath, string remotePath, long totalBytes, string checksumAlgorithm, string? displayName = null)
             {
                 UploadID = Guid.NewGuid().ToString();
                 LocalPath = localPath;
                 RemotePath = remotePath;
+                DisplayName = string.IsNullOrWhiteSpace(displayName) ? Path.GetFileName(localPath) : displayName;
                 TotalBytes = Math.Max(0, totalBytes);
                 ChecksumAlgorithm = NormalizeChecksumAlgorithm(checksumAlgorithm);
             }
@@ -418,6 +425,18 @@ namespace AgentControl
             }
         }
 
+        private async Task<RemoteFileActionResponse?> CreateRemoteDirectoryAsync(string agentId, string remotePath)
+        {
+            string requestId = Guid.NewGuid().ToString();
+            var request = new RemoteCreateDirectoryRequest
+            {
+                RequestID = requestId,
+                FullPath = NormalizeRemotePath(remotePath)
+            };
+
+            return await SendRemoteActionRequestAsync(agentId, "CREATE_REMOTE_DIRECTORY", request, requestId);
+        }
+
         private void RenderRemoteDirectory(string agentId, RemoteDirectoryContent dirContent)
         {
             if (!agentId.Equals(selectedAgentId, StringComparison.OrdinalIgnoreCase))
@@ -645,6 +664,11 @@ namespace AgentControl
             typeof(DataGridView).GetProperty("DoubleBuffered", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.SetValue(dvgUploads, true, null);
             dvgUploads.CellPainting -= dgvDownloads_CellPainting;
             dvgUploads.CellPainting += dgvDownloads_CellPainting;
+            dvgUploads.AllowDrop = true;
+            dvgUploads.DragEnter -= dvgUploads_DragEnter;
+            dvgUploads.DragEnter += dvgUploads_DragEnter;
+            dvgUploads.DragDrop -= dvgUploads_DragDrop;
+            dvgUploads.DragDrop += dvgUploads_DragDrop;
 
             dvgUploads.Columns.Add(new DataGridViewTextBoxColumn { Name = "UploadID", HeaderText = "Mã Tải", Visible = false });
             dvgUploads.Columns.Add(new DataGridViewTextBoxColumn { Name = "FileName", HeaderText = "Tên Tập Tin", Width = 200, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
@@ -652,6 +676,23 @@ namespace AgentControl
             dvgUploads.Columns.Add(new DataGridViewProgressBarColumn { Name = "Progress", HeaderText = "Tiến Độ", Width = 120 });
             dvgUploads.Columns.Add(new DataGridViewTextBoxColumn { Name = "Speed", HeaderText = "Tốc Độ", Width = 78 });
             dvgUploads.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Trạng Thái", Width = 205 });
+        }
+
+        private void dvgUploads_DragEnter(object? sender, DragEventArgs e)
+        {
+            e.Effect = !_isUploadRunning && e.Data != null && e.Data.GetDataPresent(DataFormats.FileDrop)
+                ? DragDropEffects.Copy
+                : DragDropEffects.None;
+        }
+
+        private void dvgUploads_DragDrop(object? sender, DragEventArgs e)
+        {
+            if (_isUploadRunning || e.Data?.GetData(DataFormats.FileDrop) is not string[] droppedPaths)
+            {
+                return;
+            }
+
+            QueueDroppedUploadPaths(droppedPaths);
         }
 
         private void dgvDownloads_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
@@ -2066,7 +2107,7 @@ namespace AgentControl
             }
 
             bool rowChanged = false;
-            rowChanged |= SetCellValueIfChanged(row.Cells["FileName"], Path.GetFileName(file.LocalPath));
+            rowChanged |= SetCellValueIfChanged(row.Cells["FileName"], file.DisplayName);
             rowChanged |= SetCellValueIfChanged(row.Cells["TotalSize"], convertFormatSize(file.TotalBytes));
             rowChanged |= SetCellValueIfChanged(row.Cells["Progress"], progressPercent);
             rowChanged |= SetCellValueIfChanged(row.Cells["Speed"], speedText);
@@ -2853,6 +2894,291 @@ namespace AgentControl
             return speedText;
         }
 
+        private static string CombineRemotePath(string remoteFolder, string childPath)
+        {
+            remoteFolder = NormalizeRemotePath(remoteFolder);
+            childPath = (childPath ?? string.Empty)
+                .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
+                .TrimStart(Path.DirectorySeparatorChar);
+
+            if (string.IsNullOrWhiteSpace(childPath))
+            {
+                return remoteFolder;
+            }
+
+            return NormalizeRemotePath(Path.Combine(remoteFolder, childPath));
+        }
+
+        private void BuildLocalFolderUploadPlan(
+            string localRoot,
+            string remoteParent,
+            string checksumAlgorithm,
+            List<UploadFilePlan> uploadFiles,
+            List<string> remoteDirectories,
+            List<string> scanErrors)
+        {
+            string trimmedLocalRoot = localRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string rootName = Path.GetFileName(trimmedLocalRoot);
+            if (string.IsNullOrWhiteSpace(rootName))
+            {
+                rootName = "UploadedFolder";
+            }
+
+            string remoteRoot = CombineRemotePath(remoteParent, rootName);
+            var pendingDirectories = new Stack<string>();
+            pendingDirectories.Push(localRoot);
+
+            while (pendingDirectories.Count > 0)
+            {
+                string currentDirectory = pendingDirectories.Pop();
+                string relativeDirectory = Path.GetRelativePath(localRoot, currentDirectory);
+                string remoteDirectory = relativeDirectory == "."
+                    ? remoteRoot
+                    : CombineRemotePath(remoteRoot, relativeDirectory);
+
+                remoteDirectories.Add(remoteDirectory);
+
+                try
+                {
+                    foreach (string filePath in Directory.EnumerateFiles(currentDirectory))
+                    {
+                        long totalBytes = 0;
+                        try
+                        {
+                            totalBytes = new FileInfo(filePath).Length;
+                        }
+                        catch (Exception ex)
+                        {
+                            scanErrors.Add($"{filePath}: {ex.Message}");
+                            continue;
+                        }
+
+                        string relativeFile = Path.GetRelativePath(localRoot, filePath);
+                        string remotePath = CombineRemotePath(remoteRoot, relativeFile);
+                        string displayName = Path.Combine(rootName, relativeFile);
+                        uploadFiles.Add(new UploadFilePlan(filePath, remotePath, totalBytes, checksumAlgorithm, displayName));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    scanErrors.Add($"{currentDirectory}: {ex.Message}");
+                }
+
+                try
+                {
+                    foreach (string directory in Directory.EnumerateDirectories(currentDirectory))
+                    {
+                        pendingDirectories.Push(directory);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    scanErrors.Add($"{currentDirectory}: {ex.Message}");
+                }
+            }
+        }
+
+        private bool HasQueuedUploadPlans()
+        {
+            return _queuedUploadFiles.Count > 0 || _queuedUploadDirectories.Count > 0;
+        }
+
+        private void ClearQueuedUploadPlans()
+        {
+            _queuedUploadFiles.Clear();
+            _queuedUploadDirectories.Clear();
+            _queuedUploadScanErrors.Clear();
+            _queuedUploadAgentId = string.Empty;
+            _queuedUploadRemoteFolder = string.Empty;
+        }
+
+        private void RemoveQueuedUploadPlan(string uploadId)
+        {
+            if (string.IsNullOrWhiteSpace(uploadId))
+            {
+                return;
+            }
+
+            _queuedUploadFiles.RemoveAll(file => file.UploadID.Equals(uploadId, StringComparison.OrdinalIgnoreCase));
+            if (_queuedUploadFiles.Count == 0)
+            {
+                ClearQueuedUploadPlans();
+            }
+        }
+
+        private void QueueDroppedUploadPaths(IEnumerable<string> paths)
+        {
+            if (!TryGetRemoteNodeTag(tvRemoteFolders.SelectedNode, out RemoteNodeTag? remoteTag) || remoteTag == null)
+            {
+                MessageBox.Show("Vui long chon thu muc dich tren Agent truoc khi keo tha file/folder.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string targetAgentId = remoteTag.AgentId;
+            string targetRemoteFolder = NormalizeRemotePath(remoteTag.RemotePath);
+            if (HasQueuedUploadPlans() &&
+                (!targetAgentId.Equals(_queuedUploadAgentId, StringComparison.OrdinalIgnoreCase) ||
+                 !targetRemoteFolder.Equals(_queuedUploadRemoteFolder, StringComparison.OrdinalIgnoreCase)))
+            {
+                MessageBox.Show("Danh sach upload dang cho thuoc Agent/thu muc khac. Hay clear danh sach truoc khi keo tha sang dich moi.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string checksumAlgorithm = GetSelectedChecksumAlgorithm();
+            var newUploadFiles = new List<UploadFilePlan>();
+            var newRemoteDirectories = new List<string>();
+            var scanErrors = new List<string>();
+
+            foreach (string rawPath in paths)
+            {
+                string localPath = rawPath.Trim();
+                if (File.Exists(localPath))
+                {
+                    long totalBytes = 0;
+                    try
+                    {
+                        totalBytes = new FileInfo(localPath).Length;
+                    }
+                    catch (Exception ex)
+                    {
+                        scanErrors.Add($"{localPath}: {ex.Message}");
+                        continue;
+                    }
+
+                    string remotePath = CombineRemotePath(targetRemoteFolder, Path.GetFileName(localPath));
+                    newUploadFiles.Add(new UploadFilePlan(localPath, remotePath, totalBytes, checksumAlgorithm));
+                }
+                else if (Directory.Exists(localPath))
+                {
+                    BuildLocalFolderUploadPlan(localPath, targetRemoteFolder, checksumAlgorithm, newUploadFiles, newRemoteDirectories, scanErrors);
+                }
+                else
+                {
+                    scanErrors.Add($"{localPath}: Khong ton tai.");
+                }
+            }
+
+            if (newUploadFiles.Count == 0 && newRemoteDirectories.Count == 0)
+            {
+                MessageBox.Show("Khong co file hoac thu muc hop le de them vao danh sach upload.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            if (!HasQueuedUploadPlans())
+            {
+                _queuedUploadAgentId = targetAgentId;
+                _queuedUploadRemoteFolder = targetRemoteFolder;
+            }
+
+            _queuedUploadFiles.AddRange(newUploadFiles);
+            foreach (string directory in newRemoteDirectories)
+            {
+                _queuedUploadDirectories.Add(directory);
+            }
+            _queuedUploadScanErrors.AddRange(scanErrors);
+
+            foreach (UploadFilePlan file in newUploadFiles)
+            {
+                AddOrUpdateUploadRow(file, 0, "Waiting", "0 B/s");
+            }
+
+            radlistup.Checked = true;
+            UpdateTransferGridVisibility();
+
+            if (scanErrors.Count > 0)
+            {
+                MessageBox.Show($"Da them vao danh sach upload, nhung co {scanErrors.Count} muc bi bo qua.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        private async Task UploadQueuedPlansAsync()
+        {
+            if (!HasQueuedUploadPlans())
+            {
+                return;
+            }
+
+            string uploadAgentId = _queuedUploadAgentId;
+            string remoteFolder = _queuedUploadRemoteFolder;
+            if (string.IsNullOrWhiteSpace(uploadAgentId) || string.IsNullOrWhiteSpace(remoteFolder))
+            {
+                MessageBox.Show("Danh sach upload khong xac dinh duoc Agent hoac thu muc dich. Hay clear va keo tha lai.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!_connectedAgents.TryGetValue(uploadAgentId, out var agentInfo) || agentInfo.Client == null || !agentInfo.Client.Connected)
+            {
+                MessageBox.Show("Agent dang offline hoac chua ket noi.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            var uploadFiles = _queuedUploadFiles.ToList();
+            var remoteDirectories = _queuedUploadDirectories.ToList();
+            var scanErrors = _queuedUploadScanErrors.ToList();
+            ClearQueuedUploadPlans();
+
+            _isUploadRunning = true;
+            SetTransferListLock(true, uploadMode: true);
+            btnupload.Enabled = false;
+            btnCopy.Enabled = false;
+
+            int successCount = 0;
+            int errorCount = 0;
+            int createdDirectoryCount = 0;
+            var remoteTag = new RemoteNodeTag(uploadAgentId, remoteFolder);
+
+            try
+            {
+                foreach (string remoteDirectory in remoteDirectories.Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        RemoteFileActionResponse? response = await CreateRemoteDirectoryAsync(uploadAgentId, remoteDirectory);
+                        if (response?.Success == true)
+                        {
+                            createdDirectoryCount++;
+                        }
+                        else
+                        {
+                            errorCount++;
+                        }
+                    }
+                    catch
+                    {
+                        errorCount++;
+                    }
+                }
+
+                foreach (UploadFilePlan file in uploadFiles)
+                {
+                    UploadStatusPacket result = await UploadSingleFileAsync(uploadAgentId, agentInfo.Client, file);
+                    if (result.Status.Equals("Completed", StringComparison.OrdinalIgnoreCase) || IsChecksumMatchedStatus(result.Status))
+                    {
+                        successCount++;
+                    }
+                    else
+                    {
+                        errorCount++;
+                    }
+                }
+
+                await RequestRemoteDirectoryAsync(remoteTag);
+                string scanWarning = scanErrors.Count > 0 ? $"\nBo qua khi doc local: {scanErrors.Count}" : string.Empty;
+                MessageBox.Show(
+                    $"Da hoan tat upload tu danh sach cho.\nThu muc da tao: {createdDirectoryCount}\nFile thanh cong: {successCount}\nLoi: {errorCount}{scanWarning}",
+                    "Thong bao",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+            finally
+            {
+                _isUploadRunning = false;
+                btnupload.Enabled = true;
+                btnCopy.Enabled = true;
+                SetTransferListLock(false, uploadMode: true);
+            }
+        }
+
         private async Task<UploadStatusPacket> UploadSingleFileAsync(string agentId, TcpClient client, UploadFilePlan file)
         {
             var completion = new TaskCompletionSource<UploadStatusPacket>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2970,6 +3296,12 @@ namespace AgentControl
                 return;
             }
 
+            if (HasQueuedUploadPlans())
+            {
+                await UploadQueuedPlansAsync();
+                return;
+            }
+
             if (!TryGetRemoteNodeTag(tvRemoteFolders.SelectedNode, out RemoteNodeTag? remoteTag) || remoteTag == null)
             {
                 MessageBox.Show("Vui lòng chọn thư mục đích trên Agent trước khi upload.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -2980,6 +3312,111 @@ namespace AgentControl
             if (!_connectedAgents.TryGetValue(uploadAgentId, out var agentInfo) || agentInfo.Client == null || !agentInfo.Client.Connected)
             {
                 MessageBox.Show("Agent đang offline hoặc chưa kết nối.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            DialogResult uploadMode = MessageBox.Show(
+                "Ban muon upload thu muc?\nYes: Upload thu muc\nNo: Upload file",
+                "Upload",
+                MessageBoxButtons.YesNoCancel,
+                MessageBoxIcon.Question);
+
+            if (uploadMode == DialogResult.Cancel)
+            {
+                return;
+            }
+
+            if (uploadMode == DialogResult.Yes)
+            {
+                string folderChecksumAlgorithm = GetSelectedChecksumAlgorithm();
+                string folderRemoteRoot = NormalizeRemotePath(remoteTag.RemotePath);
+                var folderUploadFiles = new List<UploadFilePlan>();
+                var remoteDirectories = new List<string>();
+                var scanErrors = new List<string>();
+
+                using FolderBrowserDialog fbd = new FolderBrowserDialog
+                {
+                    Description = "Chon thu muc de upload xuong Agent",
+                    UseDescriptionForTitle = true,
+                    ShowNewFolderButton = false
+                };
+
+                if (fbd.ShowDialog() != DialogResult.OK || string.IsNullOrWhiteSpace(fbd.SelectedPath))
+                {
+                    return;
+                }
+
+                BuildLocalFolderUploadPlan(fbd.SelectedPath, folderRemoteRoot, folderChecksumAlgorithm, folderUploadFiles, remoteDirectories, scanErrors);
+                if (folderUploadFiles.Count == 0 && remoteDirectories.Count == 0)
+                {
+                    MessageBox.Show("Khong co file hoac thu muc nao de upload.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                _isUploadRunning = true;
+                SetTransferListLock(true, uploadMode: true);
+                btnupload.Enabled = false;
+                btnCopy.Enabled = false;
+
+                int folderSuccessCount = 0;
+                int folderErrorCount = 0;
+                int createdDirectoryCount = 0;
+                try
+                {
+                    foreach (UploadFilePlan file in folderUploadFiles)
+                    {
+                        AddOrUpdateUploadRow(file, 0, "Waiting", "0 B/s");
+                    }
+
+                    foreach (string remoteDirectory in remoteDirectories.Distinct(StringComparer.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            RemoteFileActionResponse? response = await CreateRemoteDirectoryAsync(uploadAgentId, remoteDirectory);
+                            if (response?.Success == true)
+                            {
+                                createdDirectoryCount++;
+                            }
+                            else
+                            {
+                                folderErrorCount++;
+                            }
+                        }
+                        catch
+                        {
+                            folderErrorCount++;
+                        }
+                    }
+
+                    foreach (UploadFilePlan file in folderUploadFiles)
+                    {
+                        UploadStatusPacket result = await UploadSingleFileAsync(uploadAgentId, agentInfo.Client, file);
+                        if (result.Status.Equals("Completed", StringComparison.OrdinalIgnoreCase) || IsChecksumMatchedStatus(result.Status))
+                        {
+                            folderSuccessCount++;
+                        }
+                        else
+                        {
+                            folderErrorCount++;
+                        }
+                    }
+
+                    await RequestRemoteDirectoryAsync(remoteTag);
+                    string scanWarning = scanErrors.Count > 0 ? $"\nBo qua khi doc local: {scanErrors.Count}" : string.Empty;
+                    MessageBox.Show(
+                        $"Da hoan tat upload thu muc.\nThu muc da tao: {createdDirectoryCount}\nFile thanh cong: {folderSuccessCount}\nLoi: {folderErrorCount}{scanWarning}",
+                        "Thong bao",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
+                finally
+                {
+                    _isUploadRunning = false;
+                    btnupload.Enabled = true;
+                    btnCopy.Enabled = true;
+                    SetTransferListLock(false, uploadMode: true);
+                }
+
                 return;
             }
 
@@ -3230,6 +3667,7 @@ namespace AgentControl
                         dvgUploads.Rows.Clear();
                         _uploadSpeedTracker.Clear();
                         _pendingUploadCompletions.Clear();
+                        ClearQueuedUploadPlans();
                         return;
                     }
 
@@ -3241,6 +3679,7 @@ namespace AgentControl
                         {
                             _uploadSpeedTracker.TryRemove(uploadId, out _);
                             _pendingUploadCompletions.TryRemove(uploadId, out _);
+                            RemoveQueuedUploadPlan(uploadId);
                         }
 
                         if (!row.IsNewRow)

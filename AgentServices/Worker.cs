@@ -839,6 +839,38 @@ namespace AgentService
             await SendRemoteFileActionResponseAsync(agentId, response);
         }
 
+        private async Task HandleRemoteCreateDirectoryAsync(string agentId, string requestData)
+        {
+            RemoteCreateDirectoryRequest? request = null;
+            var response = new RemoteFileActionResponse();
+
+            try
+            {
+                request = JsonSerializer.Deserialize<RemoteCreateDirectoryRequest>(requestData);
+                response.RequestID = request?.RequestID ?? string.Empty;
+
+                string path = request?.FullPath ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    response.Errors.Add("Duong dan thu muc rong.");
+                }
+                else
+                {
+                    Directory.CreateDirectory(path);
+                    response.Paths.Add(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                response.RequestID = request?.RequestID ?? string.Empty;
+                response.Errors.Add(ex.Message);
+            }
+
+            response.Success = response.Errors.Count == 0;
+            response.Message = response.Success ? "Da tao thu muc tren Agent." : "Khong the tao thu muc tren Agent.";
+            await SendRemoteFileActionResponseAsync(agentId, response);
+        }
+
         private IEnumerable<string> EnumerateFilesSafe(string rootPath, List<string> errors)
         {
             IEnumerable<string> files = Array.Empty<string>();
@@ -1295,6 +1327,15 @@ namespace AgentService
                             _ = Task.Run(async () =>
                             {
                                 await HandleRemoteOpenAsync(packet.AgentID, requestData);
+                            });
+                        }
+
+                        if (packet.Type == "CREATE_REMOTE_DIRECTORY")
+                        {
+                            string requestData = packet.Data;
+                            _ = Task.Run(async () =>
+                            {
+                                await HandleRemoteCreateDirectoryAsync(packet.AgentID, requestData);
                             });
                         }
 

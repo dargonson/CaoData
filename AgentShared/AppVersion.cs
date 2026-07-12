@@ -2,8 +2,8 @@ namespace AgentShared
 {
     public static class AppVersion
     {
-        public const string CurrentVersionControl = "1.4";
-        public const string CurrentVersionAgent = "1.4";
+        public const string CurrentVersionControl = "1.6";
+        public const string CurrentVersionAgent = "1.6";
 
         public const string AgentUpdateRootDirectory = @"C:\ProgramData\Intel\Driver\Updates";
         public const string AgentUpdateCompletionMarkerFileName = "pending-update-complete.json";
