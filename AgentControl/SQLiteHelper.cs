@@ -71,6 +71,7 @@ namespace AgentControl
                 IPAddress TEXT,
                 OSVersion TEXT,
                 AgentVersion TEXT,
+                OwnerName TEXT DEFAULT '',
                 FirstConnectTime TEXT,
                 LastSeen TEXT,
                 Status TEXT DEFAULT 'Offline'
@@ -114,6 +115,7 @@ namespace AgentControl
                     }
 
                     await EnsureColumnExistsAsync(connection, "Agents", "AgentVersion", "TEXT DEFAULT ''");
+                    await EnsureColumnExistsAsync(connection, "Agents", "OwnerName", "TEXT DEFAULT ''");
                     await EnsureColumnExistsAsync(connection, "DownloadQueue", "ChecksumAlgorithm", "TEXT DEFAULT 'None'");
                 }
             }
@@ -222,6 +224,28 @@ namespace AgentControl
         }
 
         // Hàm lấy toàn bộ danh sách Agent đã từng kết nối trong DB lên để nạp vào giao diện lúc mở app
+        public static async Task UpdateAgentOwnerNameAsync(string agentID, string ownerName)
+        {
+            await DbLock.WaitAsync();
+            try
+            {
+                using (var connection = await OpenConnectionAsync())
+                {
+                    string updateQuery = "UPDATE Agents SET OwnerName = @OwnerName WHERE AgentID = @AgentID;";
+                    using (var cmd = new SQLiteCommand(updateQuery, connection))
+                    {
+                        cmd.Parameters.AddWithValue("@AgentID", agentID);
+                        cmd.Parameters.AddWithValue("@OwnerName", ownerName ?? string.Empty);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+            }
+            finally
+            {
+                DbLock.Release();
+            }
+        }
+
         public static async Task DeleteAgentAsync(string agentID)
         {
             await DbLock.WaitAsync();
@@ -267,6 +291,7 @@ namespace AgentControl
                                 { "IPAddress", reader["IPAddress"].ToString() },
                                 { "OSVersion", reader["OSVersion"].ToString() },
                                 { "AgentVersion", reader["AgentVersion"].ToString() },
+                                { "OwnerName", reader["OwnerName"].ToString() },
                                 { "FirstConnectTime", reader["FirstConnectTime"].ToString() },
                                 { "LastSeen", reader["LastSeen"].ToString() },
                                 { "Status", reader["Status"].ToString() }

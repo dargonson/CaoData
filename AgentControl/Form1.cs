@@ -39,14 +39,18 @@ namespace AgentControl
         private bool _activeDownloadBatchNotified = true;
         private bool _isUploadRunning = false;
         private bool _isDownloadGridRefreshing = false;
+        private bool _isFormMovingOrSizing = false;
         private DateTime _lastUiUpdate = DateTime.MinValue;
         private Font? _downloadStatusBoldFont;
+        private const int WM_ENTERSIZEMOVE = 0x0231;
+        private const int WM_EXITSIZEMOVE = 0x0232;
         public frmToolBackup()
         {
             InitializeComponent();
             InitializeControlVersionLabel();
             btnupload.Click += btnupload_Click;
             ListboxAgents.AgentDeleteClicked += ListboxAgents_AgentDeleteClicked;
+            ListboxAgents.AgentOwnerEditRequested += ListboxAgents_AgentOwnerEditRequested;
             lvRemoteFiles.View = View.Details;// Đảm bảo ListView hiển thị dạng bảng và có cột lúc chạy
         }
 
@@ -757,7 +761,7 @@ namespace AgentControl
             // Kích hoạt Timer bắt đầu đập chu kỳ 500ms một lần để quét DB lên UI
             tmrUpdateUI.Start();
             //ListboxAgents.AddAgent("PC-NHF-01", "Administrator", "192.168.1.15", "Windows 11", "adsadsads", true);
-            ListboxAgents.ItemHeight = 123;
+            ListboxAgents.ItemHeight = 145;
             shellImages.ImageSize = new Size(16, 16);
             shellImages.ColorDepth = ColorDepth.Depth32Bit;
             tvRemoteFolders.ImageList = shellImages;
@@ -799,6 +803,26 @@ namespace AgentControl
             lblver.Text = $"ver {FormatVersionForDisplay(ControlCurrentVersion)}";
             lblver.ForeColor = Color.FromArgb(235, 126, 25);
             lblver.Font = new Font(lblver.Font.FontFamily, Math.Max(7f, lblver.Font.Size - 1f), FontStyle.Bold);
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_ENTERSIZEMOVE)
+            {
+                _isFormMovingOrSizing = true;
+                ListboxAgents?.SetVisualUpdatesSuspended(true);
+            }
+            else if (m.Msg == WM_EXITSIZEMOVE)
+            {
+                _isFormMovingOrSizing = false;
+                ListboxAgents?.SetVisualUpdatesSuspended(false);
+                if (IsHandleCreated && !IsDisposed)
+                {
+                    BeginInvoke(new Action(() => tmrUpdateUI_Tick(this, EventArgs.Empty)));
+                }
+            }
+
+            base.WndProc(ref m);
         }
 
         private static string FormatVersionForDisplay(string? versionText)
@@ -1944,34 +1968,44 @@ namespace AgentControl
         {
             bool changed = false;
             DataGridViewCell statusCell = row.Cells["Status"];
-            statusCell.Style.Font = null;
-            statusCell.Style.ForeColor = dgvDownloads.DefaultCellStyle.ForeColor;
-            changed |= SetCellValueIfChanged(statusCell, GetChecksumDisplayStatus(status, checksumAlgorithm));
+            string displayStatus = GetChecksumDisplayStatus(status, checksumAlgorithm);
+            Color statusForeColor = dgvDownloads.DefaultCellStyle.ForeColor;
+            Font? statusFont = null;
+            int? forcedProgress = null;
 
             if (status.Equals("Error", StringComparison.OrdinalIgnoreCase))
             {
-                changed |= SetCellValueIfChanged(row.Cells["Progress"], 0);
-                changed |= SetCellValueIfChanged(statusCell, "✖ Error");
-                statusCell.Style.ForeColor = Color.FromArgb(220, 53, 69);
+                forcedProgress = 0;
+                displayStatus = "✖ Error";
+                statusForeColor = Color.FromArgb(220, 53, 69);
                 _downloadStatusBoldFont ??= new Font(dgvDownloads.Font, FontStyle.Bold);
-                statusCell.Style.Font = _downloadStatusBoldFont;
+                statusFont = _downloadStatusBoldFont;
             }
             else if (status.Equals("Completed", StringComparison.OrdinalIgnoreCase))
             {
-                changed |= SetCellValueIfChanged(row.Cells["Progress"], 100);
-                changed |= SetCellValueIfChanged(statusCell, "Done");
-                statusCell.Style.ForeColor = Color.FromArgb(25, 135, 84);
+                forcedProgress = 100;
+                displayStatus = "Done";
+                statusForeColor = Color.FromArgb(25, 135, 84);
                 _downloadStatusBoldFont ??= new Font(dgvDownloads.Font, FontStyle.Bold);
-                statusCell.Style.Font = _downloadStatusBoldFont;
+                statusFont = _downloadStatusBoldFont;
             }
             else if (IsChecksumMatchedStatus(status) || IsChecksumFailedStatus(status))
             {
-                changed |= SetCellValueIfChanged(row.Cells["Progress"], 100);
-                changed |= SetCellValueIfChanged(statusCell, GetChecksumDisplayStatus(status, checksumAlgorithm));
-                statusCell.Style.ForeColor = IsChecksumFailedStatus(status) ? Color.FromArgb(220, 53, 69) : dgvDownloads.DefaultCellStyle.ForeColor;
+                forcedProgress = 100;
+                displayStatus = GetChecksumDisplayStatus(status, checksumAlgorithm);
+                statusForeColor = IsChecksumFailedStatus(status) ? Color.FromArgb(220, 53, 69) : dgvDownloads.DefaultCellStyle.ForeColor;
                 _downloadStatusBoldFont ??= new Font(dgvDownloads.Font, FontStyle.Bold);
-                statusCell.Style.Font = _downloadStatusBoldFont;
+                statusFont = _downloadStatusBoldFont;
             }
+
+            if (forcedProgress.HasValue)
+            {
+                changed |= SetCellValueIfChanged(row.Cells["Progress"], forcedProgress.Value);
+            }
+
+            changed |= SetCellValueIfChanged(statusCell, displayStatus);
+            changed |= SetCellForeColorIfChanged(statusCell, statusForeColor);
+            changed |= SetCellFontIfChanged(statusCell, statusFont);
 
             return changed;
         }
@@ -1980,34 +2014,44 @@ namespace AgentControl
         {
             bool changed = false;
             DataGridViewCell statusCell = row.Cells["Status"];
-            statusCell.Style.Font = null;
-            statusCell.Style.ForeColor = dvgUploads.DefaultCellStyle.ForeColor;
-            changed |= SetCellValueIfChanged(statusCell, GetChecksumDisplayStatus(status, checksumAlgorithm));
+            string displayStatus = GetChecksumDisplayStatus(status, checksumAlgorithm);
+            Color statusForeColor = dvgUploads.DefaultCellStyle.ForeColor;
+            Font? statusFont = null;
+            int? forcedProgress = null;
 
             if (status.Equals("Error", StringComparison.OrdinalIgnoreCase))
             {
-                changed |= SetCellValueIfChanged(row.Cells["Progress"], 0);
-                changed |= SetCellValueIfChanged(statusCell, "✖ Error");
-                statusCell.Style.ForeColor = Color.FromArgb(220, 53, 69);
+                forcedProgress = 0;
+                displayStatus = "✖ Error";
+                statusForeColor = Color.FromArgb(220, 53, 69);
                 _downloadStatusBoldFont ??= new Font(dvgUploads.Font, FontStyle.Bold);
-                statusCell.Style.Font = _downloadStatusBoldFont;
+                statusFont = _downloadStatusBoldFont;
             }
             else if (status.Equals("Completed", StringComparison.OrdinalIgnoreCase))
             {
-                changed |= SetCellValueIfChanged(row.Cells["Progress"], 100);
-                changed |= SetCellValueIfChanged(statusCell, "Done");
-                statusCell.Style.ForeColor = Color.FromArgb(25, 135, 84);
+                forcedProgress = 100;
+                displayStatus = "Done";
+                statusForeColor = Color.FromArgb(25, 135, 84);
                 _downloadStatusBoldFont ??= new Font(dvgUploads.Font, FontStyle.Bold);
-                statusCell.Style.Font = _downloadStatusBoldFont;
+                statusFont = _downloadStatusBoldFont;
             }
             else if (IsChecksumMatchedStatus(status) || IsChecksumFailedStatus(status))
             {
-                changed |= SetCellValueIfChanged(row.Cells["Progress"], 100);
-                changed |= SetCellValueIfChanged(statusCell, GetChecksumDisplayStatus(status, checksumAlgorithm));
-                statusCell.Style.ForeColor = IsChecksumFailedStatus(status) ? Color.FromArgb(220, 53, 69) : dvgUploads.DefaultCellStyle.ForeColor;
+                forcedProgress = 100;
+                displayStatus = GetChecksumDisplayStatus(status, checksumAlgorithm);
+                statusForeColor = IsChecksumFailedStatus(status) ? Color.FromArgb(220, 53, 69) : dvgUploads.DefaultCellStyle.ForeColor;
                 _downloadStatusBoldFont ??= new Font(dvgUploads.Font, FontStyle.Bold);
-                statusCell.Style.Font = _downloadStatusBoldFont;
+                statusFont = _downloadStatusBoldFont;
             }
+
+            if (forcedProgress.HasValue)
+            {
+                changed |= SetCellValueIfChanged(row.Cells["Progress"], forcedProgress.Value);
+            }
+
+            changed |= SetCellValueIfChanged(statusCell, displayStatus);
+            changed |= SetCellForeColorIfChanged(statusCell, statusForeColor);
+            changed |= SetCellFontIfChanged(statusCell, statusFont);
 
             return changed;
         }
@@ -2023,9 +2067,63 @@ namespace AgentControl
             return true;
         }
 
+        private bool SetCellForeColorIfChanged(DataGridViewCell cell, Color color)
+        {
+            if (cell.Style.ForeColor == color)
+            {
+                return false;
+            }
+
+            cell.Style.ForeColor = color;
+            return true;
+        }
+
+        private bool SetCellFontIfChanged(DataGridViewCell cell, Font? font)
+        {
+            if (ReferenceEquals(cell.Style.Font, font) ||
+                (cell.Style.Font != null && font != null && cell.Style.Font.Equals(font)) ||
+                (cell.Style.Font == null && font == null))
+            {
+                return false;
+            }
+
+            cell.Style.Font = font;
+            return true;
+        }
+
+        private static string GetDownloadGridDisplayName(string remotePath, string localPath)
+        {
+            string remoteFileName = Path.GetFileName(remotePath);
+            string localFileName = Path.GetFileName(localPath);
+
+            if (string.IsNullOrWhiteSpace(remoteFileName))
+            {
+                remoteFileName = remotePath;
+            }
+
+            if (!string.IsNullOrWhiteSpace(localFileName) &&
+                !remoteFileName.Equals(localFileName, StringComparison.OrdinalIgnoreCase))
+            {
+                return $"{remoteFileName} -- file bị trùng, đổi tên thành {localFileName} trên ổ đĩa";
+            }
+
+            return remoteFileName;
+        }
+
         private void AddOrUpdateQueuedDownloadRow(string downloadId, DownloadFilePlan file, string checksumAlgorithm)
         {
             DataGridViewRow? targetRow = null;
+            bool addedNewRow = false;
+            bool shouldFollowNewRows = dgvDownloads.Rows.Count == 0;
+            if (dgvDownloads.Rows.Count > 0)
+            {
+                int firstDisplayed = dgvDownloads.FirstDisplayedScrollingRowIndex >= 0
+                    ? dgvDownloads.FirstDisplayedScrollingRowIndex
+                    : 0;
+                int visibleCount = Math.Max(1, dgvDownloads.DisplayedRowCount(false));
+                shouldFollowNewRows = firstDisplayed + visibleCount >= dgvDownloads.Rows.Count;
+            }
+
             dgvDownloads.SuspendLayout();
             foreach (DataGridViewRow row in dgvDownloads.Rows)
             {
@@ -2042,9 +2140,10 @@ namespace AgentControl
                 int rowIndex = dgvDownloads.Rows.Add();
                 targetRow = dgvDownloads.Rows[rowIndex];
                 targetRow.Cells["DownloadID"].Value = downloadId;
+                addedNewRow = true;
             }
 
-            targetRow.Cells["FileName"].Value = Path.GetFileName(file.RemotePath);
+            targetRow.Cells["FileName"].Value = GetDownloadGridDisplayName(file.RemotePath, file.LocalPath);
             targetRow.Cells["TotalSize"].Value = convertFormatSize(file.TotalBytes);
             targetRow.Cells["Progress"].Value = 0;
             targetRow.Cells["Speed"].Value = "0 B/s";
@@ -2052,7 +2151,7 @@ namespace AgentControl
             dgvDownloads.InvalidateRow(targetRow.Index);
             dgvDownloads.ResumeLayout();
 
-            if (targetRow.Index >= 0)
+            if (addedNewRow && shouldFollowNewRows && targetRow.Index >= 0)
             {
                 try
                 {
@@ -2060,9 +2159,6 @@ namespace AgentControl
                 }
                 catch { }
             }
-
-            dgvDownloads.Refresh();
-            dgvDownloads.Update();
         }
 
         private DataGridViewRow? FindUploadRow(string uploadId)
@@ -2253,6 +2349,69 @@ namespace AgentControl
                 }
             }
             catch { }
+        }
+
+        private static string NormalizeLocalPathKey(string path)
+        {
+            try
+            {
+                return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+            catch
+            {
+                return (path ?? string.Empty).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+        }
+
+        private static bool IsLocalDownloadPathTaken(string path, HashSet<string> reservedPaths)
+        {
+            string key = NormalizeLocalPathKey(path);
+            return reservedPaths.Contains(key) || File.Exists(path) || Directory.Exists(path);
+        }
+
+        private static string GetBrowserStyleUniqueDownloadPath(string desiredLocalPath, HashSet<string> reservedPaths)
+        {
+            string directory = Path.GetDirectoryName(desiredLocalPath) ?? string.Empty;
+            string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(desiredLocalPath);
+            string extension = Path.GetExtension(desiredLocalPath);
+
+            if (string.IsNullOrWhiteSpace(fileNameWithoutExtension))
+            {
+                fileNameWithoutExtension = Path.GetFileName(desiredLocalPath);
+            }
+
+            if (string.IsNullOrWhiteSpace(fileNameWithoutExtension))
+            {
+                fileNameWithoutExtension = "download";
+            }
+
+            string candidatePath = desiredLocalPath;
+            int duplicateIndex = 1;
+            while (IsLocalDownloadPathTaken(candidatePath, reservedPaths))
+            {
+                string candidateFileName = $"{fileNameWithoutExtension} ({duplicateIndex}){extension}";
+                candidatePath = string.IsNullOrWhiteSpace(directory)
+                    ? candidateFileName
+                    : Path.Combine(directory, candidateFileName);
+                duplicateIndex++;
+            }
+
+            reservedPaths.Add(NormalizeLocalPathKey(candidatePath));
+            return candidatePath;
+        }
+
+        private static List<DownloadFilePlan> ResolveDuplicateDownloadPaths(IEnumerable<DownloadFilePlan> files)
+        {
+            var reservedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var resolvedFiles = new List<DownloadFilePlan>();
+
+            foreach (DownloadFilePlan file in files)
+            {
+                string localPath = GetBrowserStyleUniqueDownloadPath(file.LocalPath, reservedPaths);
+                resolvedFiles.Add(new DownloadFilePlan(file.RemotePath, localPath, file.TotalBytes));
+            }
+
+            return resolvedFiles;
         }
 
         private async void brndel_Click(object sender, EventArgs e)
@@ -2630,7 +2789,8 @@ namespace AgentControl
                 agent["OSVersion"],
                 agent["AgentID"],
                 agent["AgentVersion"],
-                isOnlineStatus
+                isOnlineStatus,
+                agent.ContainsKey("OwnerName") ? agent["OwnerName"] : string.Empty
                 );
             }
         }
@@ -2693,6 +2853,98 @@ namespace AgentControl
             {
                 MessageBox.Show("Không thể xoá Agent: " + ex.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private async void ListboxAgents_AgentOwnerEditRequested(object? sender, NHFUiControls.AgentOwnerEditRequestedEventArgs e)
+        {
+            var agent = e.Agent;
+            if (agent == null || string.IsNullOrWhiteSpace(agent.AgentID))
+            {
+                return;
+            }
+
+            string? ownerName = PromptAgentOwnerName(agent.ComputerName, agent.OwnerName);
+            if (ownerName == null)
+            {
+                return;
+            }
+
+            ownerName = ownerName.Trim();
+            try
+            {
+                await SQLiteHelper.UpdateAgentOwnerNameAsync(agent.AgentID, ownerName);
+                agent.OwnerName = ownerName;
+                if (e.Index >= 0 && e.Index < ListboxAgents.Items.Count)
+                {
+                    ListboxAgents.Invalidate(ListboxAgents.GetItemRectangle(e.Index));
+                }
+                else
+                {
+                    ListboxAgents.Refresh();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Khong the cap nhat nguoi su dung: " + ex.Message, "Loi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private string? PromptAgentOwnerName(string computerName, string currentOwnerName)
+        {
+            using Form prompt = new Form
+            {
+                Text = "Nguoi su dung Agent",
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterParent,
+                MinimizeBox = false,
+                MaximizeBox = false,
+                ClientSize = new Size(360, 132)
+            };
+
+            Label label = new Label
+            {
+                AutoSize = false,
+                Left = 14,
+                Top = 14,
+                Width = 330,
+                Height = 36,
+                Text = $"Nhap ten nguoi su dung cho {computerName}:"
+            };
+
+            TextBox textBox = new TextBox
+            {
+                Left = 14,
+                Top = 52,
+                Width = 330,
+                Text = currentOwnerName ?? string.Empty
+            };
+
+            Button okButton = new Button
+            {
+                Text = "OK",
+                DialogResult = DialogResult.OK,
+                Left = 188,
+                Top = 90,
+                Width = 75
+            };
+
+            Button cancelButton = new Button
+            {
+                Text = "Cancel",
+                DialogResult = DialogResult.Cancel,
+                Left = 269,
+                Top = 90,
+                Width = 75
+            };
+
+            prompt.Controls.Add(label);
+            prompt.Controls.Add(textBox);
+            prompt.Controls.Add(okButton);
+            prompt.Controls.Add(cancelButton);
+            prompt.AcceptButton = okButton;
+            prompt.CancelButton = cancelButton;
+
+            return prompt.ShowDialog(this) == DialogResult.OK ? textBox.Text : null;
         }
 
         private async void ListboxAgents_SelectedIndexChanged(object sender, EventArgs e)
@@ -3597,6 +3849,8 @@ namespace AgentControl
                     return;
                 }
 
+                filesToDownload = ResolveDuplicateDownloadPaths(filesToDownload);
+
                 string checksumAlgorithm = GetSelectedChecksumAlgorithm();
                 var batchIds = new HashSet<string>();
                 var queuedJobs = new List<(string DownloadID, DownloadFilePlan File)>();
@@ -3743,6 +3997,11 @@ namespace AgentControl
 
         private async void tmrUpdateUI_Tick(object sender, EventArgs e)
         {
+            if (_isFormMovingOrSizing)
+            {
+                return;
+            }
+
             if (_isDownloadGridRefreshing)
             {
                 return;
@@ -3771,7 +4030,6 @@ namespace AgentControl
                 }
 
                 // 2. Duyệt qua từng bản ghi để cập nhật hoặc thêm mới vào DataGridView
-                dgvDownloads.SuspendLayout();
                 foreach (var job in downloadList)
                 {
                     rowMap.TryGetValue(job.DownloadID, out DataGridViewRow existingRow);
@@ -3790,7 +4048,7 @@ namespace AgentControl
                     }
 
                     // Bốc tách lấy tên file gọn gàng từ đường dẫn từ xa (RemotePath)
-                    string fileName = System.IO.Path.GetFileName(job.RemotePath);
+                    string fileName = GetDownloadGridDisplayName(job.RemotePath, job.LocalPath);
 
                     // 🔥 ĐÃ ĐỔI TÊN HÀM TẠI ĐÂY: Sử dụng convertFormatSize chuẩn chỉ
                     string totalSizeStr = convertFormatSize(job.TotalBytes);
@@ -3843,7 +4101,6 @@ namespace AgentControl
                         rowMap[job.DownloadID] = newRow;
                     }
                 }
-                dgvDownloads.ResumeLayout();
 
                 // 3. Dọn rác: Nếu file đã bị xóa trong DB thì xóa luôn dòng đó trên UI
                 for (int i = dgvDownloads.Rows.Count - 1; i >= 0; i--)
@@ -3908,10 +4165,6 @@ namespace AgentControl
             catch { /* Cách ly lỗi luồng giao diện */ }
             finally
             {
-                if (dgvDownloads.IsHandleCreated)
-                {
-                    try { dgvDownloads.ResumeLayout(); } catch { }
-                }
                 _isDownloadGridRefreshing = false;
             }
         }

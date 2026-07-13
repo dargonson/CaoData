@@ -250,14 +250,14 @@
             ListboxAgents.BackColor = Color.FromArgb(235, 241, 250);
             ListboxAgents.BorderStyle = BorderStyle.None;
             ListboxAgents.CardBorderRadius = 12;
-            ListboxAgents.CardHeight = 125;
+            ListboxAgents.CardHeight = 145;
             ListboxAgents.Dock = DockStyle.Fill;
             ListboxAgents.DrawMode = DrawMode.OwnerDrawVariable;
             ListboxAgents.Font = new Font("Segoe UI", 9.5F);
             ListboxAgents.FormattingEnabled = true;
             ListboxAgents.HoverCardColor = Color.FromArgb(245, 248, 253);
             ListboxAgents.IntegralHeight = false;
-            ListboxAgents.ItemHeight = 125;
+            ListboxAgents.ItemHeight = 145;
             ListboxAgents.Location = new Point(0, 0);
             ListboxAgents.Name = "ListboxAgents";
             ListboxAgents.NormalCardColor = Color.White;

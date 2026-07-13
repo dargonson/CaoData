@@ -2,6 +2,7 @@
 using System.ComponentModel;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace NHFUiControls
@@ -11,14 +12,26 @@ namespace NHFUiControls
     public class ListBoxNHF : ListBox
     {
         private int hoveredIndex = -1;
-        private int lastSelectedIndex = -1;
         private int hoveredDeleteIndex = -1;
+        private int hoveredOwnerIndex = -1;
+        private const int WM_ERASEBKGND = 0x0014;
+        private const int WM_SETREDRAW = 0x000B;
+        private const int WM_VSCROLL = 0x0115;
+        private const int WM_MOUSEWHEEL = 0x020A;
+        private const int WM_MOUSEHWHEEL = 0x020E;
+        private readonly System.Windows.Forms.Timer scrollSettleTimer;
+        private bool isScrolling;
+        private bool visualUpdatesSuspended;
 
         private readonly Font titleFont = new Font("Segoe UI", 10f, FontStyle.Bold);
         private readonly Font subFont = new Font("Segoe UI", 9f);
         private readonly Font versionFont = new Font("Segoe UI", 8f, FontStyle.Bold);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
         public event EventHandler<AgentDeleteClickedEventArgs>? AgentDeleteClicked;
+        public event EventHandler<AgentOwnerEditRequestedEventArgs>? AgentOwnerEditRequested;
 
         [Category("NHF Appearance")]
         public int CardHeight
@@ -55,8 +68,8 @@ namespace NHFUiControls
             this.MouseMove += ListBoxNHF_MouseMove;
             this.MouseLeave += ListBoxNHF_MouseLeave;
 
-            // --- THÊM DÒNG NÀY ĐỂ FIX BUG SELECTED NHIỀU CARD ---
-            this.SelectedIndexChanged += ListBoxNHF_SelectedIndexChanged;
+            scrollSettleTimer = new System.Windows.Forms.Timer { Interval = 120 };
+            scrollSettleTimer.Tick += ScrollSettleTimer_Tick;
         }
 
         // Hàm xử lý khi thay đổi lựa chọn Card
@@ -68,46 +81,142 @@ namespace NHFUiControls
             Invalidate(GetItemRectangle(index));
         }
 
-        private void ListBoxNHF_MouseMove(object sender, MouseEventArgs e)
+        private void InvalidateItems(params int[] indexes)
         {
-            int newIndex = IndexFromPoint(e.Location);
-            int newDeleteIndex = GetDeleteButtonIndexAt(e.Location);
-            if (newIndex == hoveredIndex && newDeleteIndex == hoveredDeleteIndex) return;
+            var invalidated = new HashSet<int>();
+            foreach (int index in indexes)
+            {
+                if (invalidated.Add(index))
+                {
+                    InvalidateItem(index);
+                }
+            }
+        }
+
+        public void SetVisualUpdatesSuspended(bool suspended)
+        {
+            if (visualUpdatesSuspended == suspended)
+            {
+                return;
+            }
+
+            visualUpdatesSuspended = suspended;
+            if (IsHandleCreated)
+            {
+                SendMessage(Handle, WM_SETREDRAW, suspended ? IntPtr.Zero : new IntPtr(1), IntPtr.Zero);
+            }
+
+            if (!suspended)
+            {
+                Invalidate();
+            }
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            if (visualUpdatesSuspended)
+            {
+                SendMessage(Handle, WM_SETREDRAW, IntPtr.Zero, IntPtr.Zero);
+            }
+        }
+
+        private void ListBoxNHF_MouseMove(object? sender, MouseEventArgs e)
+        {
+            if (visualUpdatesSuspended || isScrolling)
+            {
+                return;
+            }
+
+            UpdateHoverState(e.Location, true);
+        }
+
+        private void UpdateHoverState(Point location, bool invalidateChangedItems)
+        {
+            int newIndex = IndexFromPoint(location);
+            int newDeleteIndex = GetDeleteButtonIndexAt(location);
+            int newOwnerIndex = GetOwnerNameIndexAt(location);
+            if (newIndex == hoveredIndex && newDeleteIndex == hoveredDeleteIndex && newOwnerIndex == hoveredOwnerIndex) return;
 
             int oldIndex = hoveredIndex;
             int oldDeleteIndex = hoveredDeleteIndex;
+            int oldOwnerIndex = hoveredOwnerIndex;
             hoveredIndex = newIndex;
             hoveredDeleteIndex = newDeleteIndex;
+            hoveredOwnerIndex = newOwnerIndex;
 
-            InvalidateItem(oldIndex);
-            InvalidateItem(newIndex);
-            InvalidateItem(oldDeleteIndex);
-            InvalidateItem(newDeleteIndex);
-            Cursor = hoveredDeleteIndex >= 0 ? Cursors.Hand : Cursors.Default;
+            if (invalidateChangedItems)
+            {
+                InvalidateItems(oldIndex, newIndex, oldDeleteIndex, newDeleteIndex, oldOwnerIndex, newOwnerIndex);
+            }
+
+            Cursor = hoveredDeleteIndex >= 0 || hoveredOwnerIndex >= 0 ? Cursors.Hand : Cursors.Default;
         }
 
-        private void ListBoxNHF_MouseLeave(object sender, EventArgs e)
+        private void ListBoxNHF_MouseLeave(object? sender, EventArgs e)
+        {
+            if (visualUpdatesSuspended)
+            {
+                return;
+            }
+
+            ClearHoverState(true);
+        }
+
+        private void ClearHoverState(bool invalidateChangedItems)
         {
             int oldIndex = hoveredIndex;
             int oldDeleteIndex = hoveredDeleteIndex;
+            int oldOwnerIndex = hoveredOwnerIndex;
             hoveredIndex = -1;
             hoveredDeleteIndex = -1;
-            InvalidateItem(oldIndex);
-            InvalidateItem(oldDeleteIndex);
+            hoveredOwnerIndex = -1;
+            if (invalidateChangedItems)
+            {
+                InvalidateItems(oldIndex, oldDeleteIndex, oldOwnerIndex);
+            }
+
             Cursor = Cursors.Default;
-            //this.Refresh();
         }
 
-        private void ListBoxNHF_SelectedIndexChanged(object sender, EventArgs e)
+        private void BeginScrollVisualThrottle()
         {
-            InvalidateItem(lastSelectedIndex);
-            InvalidateItem(SelectedIndex);
-            lastSelectedIndex = SelectedIndex;
+            isScrolling = true;
+            ClearHoverState(false);
+            scrollSettleTimer.Stop();
+            scrollSettleTimer.Start();
+        }
+
+        private void ScrollSettleTimer_Tick(object? sender, EventArgs e)
+        {
+            scrollSettleTimer.Stop();
+            isScrolling = false;
+
+            Point mousePoint = PointToClient(Cursor.Position);
+            if (ClientRectangle.Contains(mousePoint))
+            {
+                UpdateHoverState(mousePoint, true);
+            }
         }
 
         protected override void OnMeasureItem(MeasureItemEventArgs e)
         {
             e.ItemHeight = ItemHeight;
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_ERASEBKGND)
+            {
+                m.Result = IntPtr.Zero;
+                return;
+            }
+            if (m.Msg == WM_VSCROLL || m.Msg == WM_MOUSEWHEEL || m.Msg == WM_MOUSEHWHEEL)
+            {
+                BeginScrollVisualThrottle();
+            }
+
+            base.WndProc(ref m);
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
@@ -116,6 +225,14 @@ namespace NHFUiControls
             if (deleteIndex >= 0 && Items[deleteIndex] is AgentInfo agent)
             {
                 AgentDeleteClicked?.Invoke(this, new AgentDeleteClickedEventArgs(agent, deleteIndex));
+                return;
+            }
+
+            int ownerIndex = GetOwnerNameIndexAt(e.Location);
+            if (ownerIndex >= 0 && Items[ownerIndex] is AgentInfo ownerAgent)
+            {
+                SelectedIndex = ownerIndex;
+                AgentOwnerEditRequested?.Invoke(this, new AgentOwnerEditRequestedEventArgs(ownerAgent, ownerIndex));
                 return;
             }
 
@@ -135,9 +252,10 @@ namespace NHFUiControls
             string os,
             string agentID,
             string agentVersion,
-            bool online)
+            bool online,
+            string ownerName = "")
         {
-            Items.Add(new AgentInfo
+            int newIndex = Items.Add(new AgentInfo
             {
                 ComputerName = computerName,
                 UserName = userName,
@@ -145,10 +263,11 @@ namespace NHFUiControls
                 Os = os,
                 AgentID = agentID,
                 AgentVersion = agentVersion,
+                OwnerName = ownerName,
                 IsOnline = online
             });
 
-            Invalidate();
+            InvalidateItem(newIndex);
         }
 
         public void SetOnline(string agentID, bool online)
@@ -183,7 +302,7 @@ namespace NHFUiControls
             );
 
             bool selected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
-            bool hovered = e.Index == hoveredIndex;
+            bool hovered = !isScrolling && e.Index == hoveredIndex;
 
             Color cardColor = NormalCardColor;
             if (selected) cardColor = SelectedCardColor;
@@ -207,7 +326,7 @@ namespace NHFUiControls
             DrawStatusDot(g, iconX + 28, iconY + 25, agent.IsOnline);
 
             int textX = card.Left + 64;
-            int textY = card.Top + (card.Height - 98) / 2;
+            int textY = card.Top + 8;
             int textWidth = card.Width - 95;
 
             TextRenderer.DrawText(g, agent.ComputerName, titleFont,
@@ -235,6 +354,35 @@ namespace NHFUiControls
                 Color.FromArgb(70, 85, 105),
                 TextFormatFlags.EndEllipsis);
 
+            Rectangle ownerBounds = GetOwnerNameBounds(card);
+            string ownerText = string.IsNullOrWhiteSpace(agent.OwnerName)
+                ? "Người sử dụng"
+                : agent.OwnerName;
+
+            bool hasOwner = !string.IsNullOrWhiteSpace(agent.OwnerName);
+
+            Color ownerColor = hasOwner
+                ? Color.FromArgb(0, 120, 40)      // Xanh lá đậm
+                : Color.FromArgb(120, 130, 145);  // Xám
+
+            using var ownerFont = new Font(
+                subFont.FontFamily,
+                hasOwner ? subFont.Size + 2f : subFont.Size - 1f,
+                hasOwner ? FontStyle.Bold : FontStyle.Regular);
+
+            if (!isScrolling && e.Index == hoveredOwnerIndex)
+            {
+                using var ownerHoverBrush = new SolidBrush(Color.FromArgb(232, 240, 252));
+                g.FillRectangle(ownerHoverBrush, ownerBounds);
+            }
+
+            TextRenderer.DrawText(
+                g,
+                ownerText,
+                ownerFont,
+                ownerBounds,
+                ownerColor,
+                TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter);
             /* string versionText = string.IsNullOrWhiteSpace(agent.AgentVersion)
                  ? "ver ?"
                  : $"ver {agent.AgentVersion}";
@@ -300,7 +448,7 @@ namespace NHFUiControls
             //
             //
 
-            DrawDeleteButton(g, GetDeleteButtonBounds(card), e.Index == hoveredDeleteIndex);
+            DrawDeleteButton(g, GetDeleteButtonBounds(card), !isScrolling && e.Index == hoveredDeleteIndex);
         }
 
         private int GetDeleteButtonIndexAt(Point location)
@@ -322,9 +470,34 @@ namespace NHFUiControls
             return GetDeleteButtonBounds(card).Contains(location) ? index : -1;
         }
 
+        private int GetOwnerNameIndexAt(Point location)
+        {
+            int index = IndexFromPoint(location);
+            if (index < 0 || index >= Items.Count)
+            {
+                return -1;
+            }
+
+            Rectangle itemBounds = GetItemRectangle(index);
+            Rectangle card = new Rectangle(
+                itemBounds.Left + 8,
+                itemBounds.Top + 6,
+                itemBounds.Width - 16,
+                itemBounds.Height - 12
+            );
+
+            return GetOwnerNameBounds(card).Contains(location) ? index : -1;
+        }
+
         private Rectangle GetDeleteButtonBounds(Rectangle card)
         {
             return new Rectangle(card.Right - 30, card.Top + 12, 22, 22);
+        }
+
+        private Rectangle GetOwnerNameBounds(Rectangle card)
+        {
+            int textX = card.Left + 64;
+            return new Rectangle(textX, card.Top + 110, Math.Max(70, card.Right - textX - 10), 20);
         }
 
         private void DrawDeleteButton(Graphics g, Rectangle bounds, bool hovered)
@@ -402,6 +575,7 @@ namespace NHFUiControls
         {
             if (disposing)
             {
+                scrollSettleTimer.Dispose();
                 titleFont.Dispose();
                 subFont.Dispose();
                 versionFont.Dispose();
@@ -419,6 +593,7 @@ namespace NHFUiControls
         public string Os { get; set; } = "";
         public string AgentID { get; set; } = "";
         public string AgentVersion { get; set; } = "";
+        public string OwnerName { get; set; } = "";
         public bool IsOnline { get; set; }
 
         public override string ToString() => ComputerName;
@@ -430,6 +605,18 @@ namespace NHFUiControls
         public int Index { get; }
 
         public AgentDeleteClickedEventArgs(AgentInfo agent, int index)
+        {
+            Agent = agent;
+            Index = index;
+        }
+    }
+
+    public class AgentOwnerEditRequestedEventArgs : EventArgs
+    {
+        public AgentInfo Agent { get; }
+        public int Index { get; }
+
+        public AgentOwnerEditRequestedEventArgs(AgentInfo agent, int index)
         {
             Agent = agent;
             Index = index;
