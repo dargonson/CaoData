@@ -44,7 +44,11 @@ namespace AgentControl
             }
 
             bool isError = status.Contains("Error", StringComparison.OrdinalIgnoreCase);
-            bool isCompleted = status.Contains("Complete", StringComparison.OrdinalIgnoreCase);
+            bool isCompleted =
+                status.Contains("Complete", StringComparison.OrdinalIgnoreCase) ||
+                status.Equals("Done", StringComparison.OrdinalIgnoreCase) ||
+                status.Contains("MATCHED", StringComparison.OrdinalIgnoreCase) ||
+                status.Contains("FAIL", StringComparison.OrdinalIgnoreCase);
             if (isError)
             {
                 progressVal = 0;
@@ -62,6 +66,20 @@ namespace AgentControl
 
             if (width > 0 && height > 0)
             {
+                if (isCompleted)
+                {
+                    string completeText = "Hoàn Thành";
+                    Font baseFont = cellStyle.Font ?? SystemFonts.DefaultFont;
+                    using Font completeFont = new Font(baseFont.FontFamily, baseFont.Size + 1F, FontStyle.Bold);
+                    Size completeTextSize = TextRenderer.MeasureText(completeText, completeFont);
+                    int completeTextX = cellBounds.X + (cellBounds.Width - completeTextSize.Width) / 2;
+                    int completeTextY = cellBounds.Y + (cellBounds.Height - completeTextSize.Height) / 2;
+                    using (Brush textBrush = new SolidBrush(Color.FromArgb(25, 135, 84)))
+                    {
+                        graphics.DrawString(completeText, completeFont, textBrush, completeTextX, completeTextY);
+                    }
+                    return;
+                }
                 // Vẽ khung viền thanh Progress (Màu xám nhẹ)
                 using (Pen pen = new Pen(Color.LightGray, 1))
                 {

@@ -1,6 +1,6 @@
 ﻿namespace AgentControl
 {
-    partial class Form1
+    partial class frmToolBackup
     {
         /// <summary>
         ///  Required designer variable.
@@ -29,7 +29,19 @@
         private void InitializeComponent()
         {
             components = new System.ComponentModel.Container();
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(frmToolBackup));
             panelHeader = new Panel();
+            groupBox1 = new GroupBox();
+            radlistdown = new RadioButton();
+            radlistup = new RadioButton();
+            btnupload = new Button();
+            lblver = new Label();
+            txtxoa = new TextBox();
+            grbchecksum = new GroupBox();
+            radnone = new RadioButton();
+            radmd5 = new RadioButton();
+            radsha256 = new RadioButton();
+            btncleardrv = new Button();
             btnKetNoi = new Button();
             btnCopy = new Button();
             brndel = new Button();
@@ -37,22 +49,35 @@
             ListboxAgents = new NHFUiControls.ListBoxNHF();
             panelZone2 = new Panel();
             tvRemoteFolders = new TreeView();
+            dvgUploads = new DataGridView();
+            dgvDownloads = new DataGridView();
+            tmrUpdateUI = new System.Windows.Forms.Timer(components);
             lvRemoteFiles = new ListView();
             colName = new ColumnHeader();
             ColSize = new ColumnHeader();
             ColType = new ColumnHeader();
             ColDate = new ColumnHeader();
-            dgvDownloads = new DataGridView();
-            tmrUpdateUI = new System.Windows.Forms.Timer(components);
-            btncleardrv = new Button();
+            panel1 = new Panel();
+            panel2 = new Panel();
             panelHeader.SuspendLayout();
+            groupBox1.SuspendLayout();
+            grbchecksum.SuspendLayout();
             panelZone1.SuspendLayout();
             panelZone2.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)dvgUploads).BeginInit();
             ((System.ComponentModel.ISupportInitialize)dgvDownloads).BeginInit();
+            panel1.SuspendLayout();
+            panel2.SuspendLayout();
             SuspendLayout();
             // 
             // panelHeader
             // 
+            panelHeader.AutoSize = true;
+            panelHeader.Controls.Add(groupBox1);
+            panelHeader.Controls.Add(btnupload);
+            panelHeader.Controls.Add(lblver);
+            panelHeader.Controls.Add(txtxoa);
+            panelHeader.Controls.Add(grbchecksum);
             panelHeader.Controls.Add(btncleardrv);
             panelHeader.Controls.Add(btnKetNoi);
             panelHeader.Controls.Add(btnCopy);
@@ -61,12 +86,129 @@
             panelHeader.Location = new Point(0, 0);
             panelHeader.MaximumSize = new Size(0, 60);
             panelHeader.Name = "panelHeader";
-            panelHeader.Size = new Size(1870, 60);
+            panelHeader.Size = new Size(1747, 57);
             panelHeader.TabIndex = 0;
+            // 
+            // groupBox1
+            // 
+            groupBox1.Controls.Add(radlistdown);
+            groupBox1.Controls.Add(radlistup);
+            groupBox1.Location = new Point(1083, 3);
+            groupBox1.Name = "groupBox1";
+            groupBox1.Size = new Size(371, 48);
+            groupBox1.TabIndex = 8;
+            groupBox1.TabStop = false;
+            groupBox1.Text = "Danh sách file Upload/Download";
+            // 
+            // radlistdown
+            // 
+            radlistdown.AutoSize = true;
+            radlistdown.Location = new Point(200, 21);
+            radlistdown.Name = "radlistdown";
+            radlistdown.Size = new Size(156, 19);
+            radlistdown.TabIndex = 1;
+            radlistdown.TabStop = true;
+            radlistdown.Text = "Danh sách file Download";
+            radlistdown.UseVisualStyleBackColor = true;
+            radlistdown.CheckedChanged += radlistdown_CheckedChanged;
+            // 
+            // radlistup
+            // 
+            radlistup.AutoSize = true;
+            radlistup.Location = new Point(15, 22);
+            radlistup.Name = "radlistup";
+            radlistup.Size = new Size(140, 19);
+            radlistup.TabIndex = 0;
+            radlistup.TabStop = true;
+            radlistup.Text = "Danh sách file Upload";
+            radlistup.UseVisualStyleBackColor = true;
+            radlistup.CheckedChanged += radlistup_CheckedChanged;
+            // 
+            // btnupload
+            // 
+            btnupload.Location = new Point(574, 11);
+            btnupload.Name = "btnupload";
+            btnupload.Size = new Size(124, 42);
+            btnupload.TabIndex = 7;
+            btnupload.Text = "Upload";
+            btnupload.UseVisualStyleBackColor = true;
+            // 
+            // lblver
+            // 
+            lblver.AutoSize = true;
+            lblver.Enabled = false;
+            lblver.Location = new Point(1697, 11);
+            lblver.Name = "lblver";
+            lblver.Size = new Size(38, 15);
+            lblver.TabIndex = 6;
+            lblver.Text = "label1";
+            lblver.Visible = false;
+            // 
+            // txtxoa
+            // 
+            txtxoa.Location = new Point(761, 0);
+            txtxoa.Name = "txtxoa";
+            txtxoa.Size = new Size(139, 23);
+            txtxoa.TabIndex = 5;
+            // 
+            // grbchecksum
+            // 
+            grbchecksum.Controls.Add(radnone);
+            grbchecksum.Controls.Add(radmd5);
+            grbchecksum.Controls.Add(radsha256);
+            grbchecksum.Location = new Point(12, 3);
+            grbchecksum.Name = "grbchecksum";
+            grbchecksum.Size = new Size(288, 48);
+            grbchecksum.TabIndex = 4;
+            grbchecksum.TabStop = false;
+            grbchecksum.Text = "CheckSum";
+            // 
+            // radnone
+            // 
+            radnone.AutoSize = true;
+            radnone.Location = new Point(211, 22);
+            radnone.Name = "radnone";
+            radnone.Size = new Size(54, 19);
+            radnone.TabIndex = 2;
+            radnone.TabStop = true;
+            radnone.Text = "None";
+            radnone.UseVisualStyleBackColor = true;
+            // 
+            // radmd5
+            // 
+            radmd5.AutoSize = true;
+            radmd5.Location = new Point(124, 21);
+            radmd5.Name = "radmd5";
+            radmd5.Size = new Size(50, 19);
+            radmd5.TabIndex = 1;
+            radmd5.TabStop = true;
+            radmd5.Text = "MD5";
+            radmd5.UseVisualStyleBackColor = true;
+            // 
+            // radsha256
+            // 
+            radsha256.AutoSize = true;
+            radsha256.Location = new Point(6, 21);
+            radsha256.Name = "radsha256";
+            radsha256.Size = new Size(71, 19);
+            radsha256.TabIndex = 0;
+            radsha256.TabStop = true;
+            radsha256.Text = "SHA-256";
+            radsha256.UseVisualStyleBackColor = true;
+            // 
+            // btncleardrv
+            // 
+            btncleardrv.Location = new Point(933, 9);
+            btncleardrv.Name = "btncleardrv";
+            btncleardrv.Size = new Size(112, 42);
+            btncleardrv.TabIndex = 3;
+            btncleardrv.Text = "Clear";
+            btncleardrv.UseVisualStyleBackColor = true;
+            btncleardrv.Click += btncleardrv_Click;
             // 
             // btnKetNoi
             // 
-            btnKetNoi.Location = new Point(1016, 12);
+            btnKetNoi.Location = new Point(312, 12);
             btnKetNoi.Name = "btnKetNoi";
             btnKetNoi.Size = new Size(126, 42);
             btnKetNoi.TabIndex = 2;
@@ -76,19 +218,19 @@
             // 
             // btnCopy
             // 
-            btnCopy.Location = new Point(1148, 12);
+            btnCopy.Location = new Point(444, 12);
             btnCopy.Name = "btnCopy";
             btnCopy.Size = new Size(124, 42);
             btnCopy.TabIndex = 1;
-            btnCopy.Text = "Copy";
+            btnCopy.Text = "Download";
             btnCopy.UseVisualStyleBackColor = true;
             btnCopy.Click += btnCopy_Click;
             // 
             // brndel
             // 
-            brndel.Location = new Point(1278, 12);
+            brndel.Location = new Point(761, 26);
             brndel.Name = "brndel";
-            brndel.Size = new Size(150, 42);
+            brndel.Size = new Size(139, 25);
             brndel.TabIndex = 0;
             brndel.Text = "Xoá";
             brndel.UseVisualStyleBackColor = true;
@@ -98,9 +240,9 @@
             // 
             panelZone1.Controls.Add(ListboxAgents);
             panelZone1.Dock = DockStyle.Left;
-            panelZone1.Location = new Point(0, 60);
+            panelZone1.Location = new Point(0, 57);
             panelZone1.Name = "panelZone1";
-            panelZone1.Size = new Size(308, 601);
+            panelZone1.Size = new Size(291, 604);
             panelZone1.TabIndex = 1;
             // 
             // ListboxAgents
@@ -108,19 +250,19 @@
             ListboxAgents.BackColor = Color.FromArgb(235, 241, 250);
             ListboxAgents.BorderStyle = BorderStyle.None;
             ListboxAgents.CardBorderRadius = 12;
-            ListboxAgents.CardHeight = 125;
+            ListboxAgents.CardHeight = 145;
             ListboxAgents.Dock = DockStyle.Fill;
             ListboxAgents.DrawMode = DrawMode.OwnerDrawVariable;
             ListboxAgents.Font = new Font("Segoe UI", 9.5F);
             ListboxAgents.FormattingEnabled = true;
             ListboxAgents.HoverCardColor = Color.FromArgb(245, 248, 253);
             ListboxAgents.IntegralHeight = false;
-            ListboxAgents.ItemHeight = 125;
+            ListboxAgents.ItemHeight = 145;
             ListboxAgents.Location = new Point(0, 0);
             ListboxAgents.Name = "ListboxAgents";
             ListboxAgents.NormalCardColor = Color.White;
             ListboxAgents.SelectedCardColor = Color.FromArgb(205, 220, 242);
-            ListboxAgents.Size = new Size(308, 601);
+            ListboxAgents.Size = new Size(291, 604);
             ListboxAgents.TabIndex = 4;
             ListboxAgents.SelectedIndexChanged += ListboxAgents_SelectedIndexChanged;
             // 
@@ -128,9 +270,9 @@
             // 
             panelZone2.Controls.Add(tvRemoteFolders);
             panelZone2.Dock = DockStyle.Left;
-            panelZone2.Location = new Point(308, 60);
+            panelZone2.Location = new Point(291, 57);
             panelZone2.Name = "panelZone2";
-            panelZone2.Size = new Size(313, 601);
+            panelZone2.Size = new Size(294, 604);
             panelZone2.TabIndex = 2;
             // 
             // tvRemoteFolders
@@ -139,21 +281,44 @@
             tvRemoteFolders.Dock = DockStyle.Fill;
             tvRemoteFolders.Location = new Point(0, 0);
             tvRemoteFolders.Name = "tvRemoteFolders";
-            tvRemoteFolders.Size = new Size(313, 601);
+            tvRemoteFolders.Size = new Size(294, 604);
             tvRemoteFolders.TabIndex = 0;
             tvRemoteFolders.BeforeCollapse += tvRemoteFolders_BeforeCollapse;
             tvRemoteFolders.BeforeExpand += tvRemoteFolders_BeforeExpand;
             tvRemoteFolders.AfterSelect += tvRemoteFolders_AfterSelect;
             // 
+            // dvgUploads
+            // 
+            dvgUploads.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            dvgUploads.Dock = DockStyle.Fill;
+            dvgUploads.Location = new Point(0, 0);
+            dvgUploads.Name = "dvgUploads";
+            dvgUploads.Size = new Size(693, 604);
+            dvgUploads.TabIndex = 8;
+            // 
+            // dgvDownloads
+            // 
+            dgvDownloads.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            dgvDownloads.Dock = DockStyle.Fill;
+            dgvDownloads.Location = new Point(0, 0);
+            dgvDownloads.Name = "dgvDownloads";
+            dgvDownloads.Size = new Size(693, 604);
+            dgvDownloads.TabIndex = 4;
+            // 
+            // tmrUpdateUI
+            // 
+            tmrUpdateUI.Interval = 1000;
+            tmrUpdateUI.Tick += tmrUpdateUI_Tick;
+            // 
             // lvRemoteFiles
             // 
             lvRemoteFiles.CheckBoxes = true;
             lvRemoteFiles.Columns.AddRange(new ColumnHeader[] { colName, ColSize, ColType, ColDate });
-            lvRemoteFiles.Dock = DockStyle.Left;
+            lvRemoteFiles.Dock = DockStyle.Fill;
             lvRemoteFiles.GridLines = true;
-            lvRemoteFiles.Location = new Point(621, 60);
+            lvRemoteFiles.Location = new Point(0, 0);
             lvRemoteFiles.Name = "lvRemoteFiles";
-            lvRemoteFiles.Size = new Size(487, 601);
+            lvRemoteFiles.Size = new Size(469, 604);
             lvRemoteFiles.TabIndex = 3;
             lvRemoteFiles.UseCompatibleStateImageBehavior = false;
             lvRemoteFiles.View = View.Details;
@@ -176,49 +341,55 @@
             // ColDate
             // 
             ColDate.Text = "Date";
+            ColDate.Width = 95;
             // 
-            // dgvDownloads
+            // panel1
             // 
-            dgvDownloads.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
-            dgvDownloads.Dock = DockStyle.Right;
-            dgvDownloads.Location = new Point(1114, 60);
-            dgvDownloads.Name = "dgvDownloads";
-            dgvDownloads.Size = new Size(756, 601);
-            dgvDownloads.TabIndex = 4;
+            panel1.Controls.Add(lvRemoteFiles);
+            panel1.Dock = DockStyle.Left;
+            panel1.Location = new Point(585, 57);
+            panel1.Name = "panel1";
+            panel1.Size = new Size(469, 604);
+            panel1.TabIndex = 5;
             // 
-            // tmrUpdateUI
+            // panel2
             // 
-            tmrUpdateUI.Interval = 1000;
-            tmrUpdateUI.Tick += tmrUpdateUI_Tick;
+            panel2.Controls.Add(dvgUploads);
+            panel2.Controls.Add(dgvDownloads);
+            panel2.Dock = DockStyle.Fill;
+            panel2.Location = new Point(1054, 57);
+            panel2.Name = "panel2";
+            panel2.Size = new Size(693, 604);
+            panel2.TabIndex = 6;
             // 
-            // btncleardrv
-            // 
-            btncleardrv.Location = new Point(1434, 12);
-            btncleardrv.Name = "btncleardrv";
-            btncleardrv.Size = new Size(112, 42);
-            btncleardrv.TabIndex = 3;
-            btncleardrv.Text = "Clear";
-            btncleardrv.UseVisualStyleBackColor = true;
-            btncleardrv.Click += btncleardrv_Click;
-            // 
-            // Form1
+            // frmToolBackup
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(1870, 661);
-            Controls.Add(dgvDownloads);
-            Controls.Add(lvRemoteFiles);
+            ClientSize = new Size(1747, 661);
+            Controls.Add(panel2);
+            Controls.Add(panel1);
             Controls.Add(panelZone2);
             Controls.Add(panelZone1);
             Controls.Add(panelHeader);
-            Name = "Form1";
-            Text = "Form1";
+            Icon = (Icon)resources.GetObject("$this.Icon");
+            Name = "frmToolBackup";
+            Text = "Tool Backup";
             Load += Form1_Load;
             panelHeader.ResumeLayout(false);
+            panelHeader.PerformLayout();
+            groupBox1.ResumeLayout(false);
+            groupBox1.PerformLayout();
+            grbchecksum.ResumeLayout(false);
+            grbchecksum.PerformLayout();
             panelZone1.ResumeLayout(false);
             panelZone2.ResumeLayout(false);
+            ((System.ComponentModel.ISupportInitialize)dvgUploads).EndInit();
             ((System.ComponentModel.ISupportInitialize)dgvDownloads).EndInit();
+            panel1.ResumeLayout(false);
+            panel2.ResumeLayout(false);
             ResumeLayout(false);
+            PerformLayout();
         }
 
         #endregion
@@ -226,11 +397,6 @@
         private Panel panelZone1;
         private Panel panelZone2;
         private TreeView tvRemoteFolders;
-        private ListView lvRemoteFiles;
-        private ColumnHeader colName;
-        private ColumnHeader ColSize;
-        private ColumnHeader ColType;
-        private ColumnHeader ColDate;
         private Button brndel;
         private Button btnCopy;
         private Button btnKetNoi;
@@ -239,5 +405,28 @@
         private DataGridView dgvDownloads;
         private System.Windows.Forms.Timer tmrUpdateUI;
         private Button btncleardrv;
+        private GroupBox grbchecksum;
+        private RadioButton radsha256;
+        private RadioButton radnone;
+        private RadioButton radmd5;
+        private ListView lvRemoteFiles;
+        private ColumnHeader colName;
+        private ColumnHeader ColSize;
+        private ColumnHeader ColType;
+        private ColumnHeader ColDate;
+        private Panel panel1;
+        private Panel panel2;
+        private DataGridViewTextBoxColumn A;
+        private DataGridViewTextBoxColumn E;
+        private DataGridViewTextBoxColumn B;
+        private DataGridViewTextBoxColumn C;
+        private DataGridViewTextBoxColumn D;
+        private TextBox txtxoa;
+        private Label lblver;
+        private Button btnupload;
+        private GroupBox groupBox1;
+        private RadioButton radlistdown;
+        private RadioButton radlistup;
+        private DataGridView dvgUploads;
     }
 }

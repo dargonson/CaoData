@@ -11,9 +11,11 @@ namespace AgentShared
     public static class TransferFrameProtocol
     {
         public const byte BinaryDownloadChunkMarker = 0x02;
+        public const byte BinaryUploadChunkMarker = 0x03;
         private const int BinaryHeaderPrefixSize = 5;
         private const int StreamCopyBufferSize = 128 * 1024;
         private static readonly byte[] BinaryDownloadChunkMarkerBytes = { BinaryDownloadChunkMarker };
+        private static readonly byte[] BinaryUploadChunkMarkerBytes = { BinaryUploadChunkMarker };
 
         public static async Task WriteJsonPacketAsync(Stream stream, SocketPacket packet, CancellationToken token = default)
         {
@@ -32,6 +34,27 @@ namespace AgentShared
             int count,
             CancellationToken token = default)
         {
+            await WriteBinaryChunkAsync(stream, BinaryDownloadChunkMarkerBytes, header, buffer, count, token);
+        }
+
+        public static async Task WriteBinaryUploadChunkAsync(
+            Stream stream,
+            FileChunkPacket header,
+            byte[] buffer,
+            int count,
+            CancellationToken token = default)
+        {
+            await WriteBinaryChunkAsync(stream, BinaryUploadChunkMarkerBytes, header, buffer, count, token);
+        }
+
+        private static async Task WriteBinaryChunkAsync(
+            Stream stream,
+            byte[] markerBytes,
+            FileChunkPacket header,
+            byte[] buffer,
+            int count,
+            CancellationToken token)
+        {
             if (count < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(count));
@@ -46,7 +69,7 @@ namespace AgentShared
             byte[] headerSizeBytes = BitConverter.GetBytes(headerBytes.Length);
 
             await stream.WriteAsync(frameSizeBytes, 0, frameSizeBytes.Length, token);
-            await stream.WriteAsync(BinaryDownloadChunkMarkerBytes, 0, BinaryDownloadChunkMarkerBytes.Length, token);
+            await stream.WriteAsync(markerBytes, 0, markerBytes.Length, token);
             await stream.WriteAsync(headerSizeBytes, 0, headerSizeBytes.Length, token);
             await stream.WriteAsync(headerBytes, 0, headerBytes.Length, token);
 

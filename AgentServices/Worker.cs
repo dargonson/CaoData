@@ -1,10 +1,12 @@
 using System;
 using System.IO;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
@@ -16,8 +18,13 @@ namespace AgentService
 {
     public class Worker : BackgroundService
     {
+        private const string AgentServiceVersion = AppVersion.CurrentVersionAgent;
+
         private readonly ILogger<Worker> _logger;
         private readonly IConfiguration _configuration;
+        private readonly AgentUpdateClient _updateClient;
+        private string _activeControlHost = "127.0.0.1";
+        private int _activeControlPort = 9000;
 
         private TcpClient? _client;
         private NetworkStream? _stream;
@@ -33,6 +40,7 @@ namespace AgentService
         {
             _logger = logger;
             _configuration = configuration;
+            _updateClient = new AgentUpdateClient(SendPacketAsync, () => (_activeControlHost, _activeControlPort), logger);
         }
 
 
@@ -82,7 +90,7 @@ namespace AgentService
                 Username = username,
                 IPAddress = GetLocalIPAddress(), // Gọi hàm lấy IP LAN
                 OSVersion = osVersion,
-                AgentVersion = "1.0.0"
+                AgentVersion = AgentServiceVersion
             };
         }
 
@@ -313,6 +321,7 @@ namespace AgentService
 
                             // Đăng ký thông tin máy với Server ngay khi vừa kết nối
                             await SendRegisterInfoAsync();
+                            await _updateClient.SendPendingCompletionStatusAsync(agentID, stoppingToken);
 
                             // Kích hoạt luồng gửi Tim Mạch (Heartbeat) song song định kỳ 30 giây
                             _ = StartHeartbeatLoopAsync(agentID, stoppingToken);
@@ -366,6 +375,8 @@ namespace AgentService
                     _client?.Close();
                     _client = client;
                     _stream = _client.GetStream();
+                    _activeControlHost = ip;
+                    _activeControlPort = port;
                     _logger?.LogInformation("Kết nối {Profile} thành công: {Ip}:{Port}", profileName, ip, port);
                     return true;
                 }
@@ -455,6 +466,202 @@ namespace AgentService
         }
 
         // Tính năng số 1: Gửi thông tin máy cho Server
+        private async Task SendUploadStatusAsync(
+            string agentId,
+            string uploadId,
+            string remotePath,
+            long uploadedBytes,
+            long totalBytes,
+            string status,
+            string checksumAlgorithm,
+            string errorMessage = "")
+        {
+            var statusPacket = new UploadStatusPacket
+            {
+                UploadID = uploadId,
+                RemotePath = remotePath,
+                UploadedBytes = Math.Max(0, uploadedBytes),
+                TotalBytes = Math.Max(0, totalBytes),
+                Status = status,
+                ChecksumAlgorithm = NormalizeChecksumAlgorithm(checksumAlgorithm),
+                ErrorMessage = errorMessage
+            };
+
+            await SendPacketAsync(new SocketPacket
+            {
+                Type = "UPLOAD_STATUS",
+                AgentID = agentId,
+                Data = JsonSerializer.Serialize(statusPacket)
+            });
+        }
+
+        private async Task HandleBinaryUploadChunkAsync(NetworkStream stream, int frameSize, CancellationToken token)
+        {
+            FileChunkPacket? chunk = null;
+            int bodySize = 0;
+            bool bodyCopyStarted = false;
+            bool bodyCopyCompleted = false;
+
+            try
+            {
+                var binaryFrame = await TransferFrameProtocol.ReadBinaryChunkHeaderAsync(stream, frameSize, token);
+                chunk = binaryFrame.Header;
+                bodySize = binaryFrame.BodySize;
+
+                string agentId = string.IsNullOrWhiteSpace(chunk.AgentID)
+                    ? HardwareInfo.GetUniqueAgentID()
+                    : chunk.AgentID;
+                string uploadId = chunk.DownloadID;
+                string targetPath = chunk.RemotePath;
+                string checksumAlgorithm = NormalizeChecksumAlgorithm(chunk.ChecksumAlgorithm);
+
+                if (string.IsNullOrWhiteSpace(uploadId) || string.IsNullOrWhiteSpace(targetPath))
+                {
+                    await TransferFrameProtocol.DrainExactAsync(stream, bodySize, token);
+                    return;
+                }
+
+                string? targetFolder = Path.GetDirectoryName(targetPath);
+                if (!string.IsNullOrWhiteSpace(targetFolder))
+                {
+                    Directory.CreateDirectory(targetFolder);
+                }
+
+                string tempPath = targetPath + ".uploading";
+                await using (FileStream fs = new FileStream(tempPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, 128 * 1024, FileOptions.Asynchronous))
+                {
+                    if (chunk.Offset <= 0)
+                    {
+                        fs.SetLength(0);
+                    }
+
+                    fs.Seek(chunk.Offset, SeekOrigin.Begin);
+                    bodyCopyStarted = true;
+                    await TransferFrameProtocol.CopyExactToAsync(stream, fs, bodySize, token);
+                    bodyCopyCompleted = true;
+
+                    if (chunk.IsLastChunk && chunk.TotalBytes >= 0)
+                    {
+                        fs.SetLength(chunk.TotalBytes);
+                    }
+
+                    await fs.FlushAsync(token);
+                }
+
+                long currentUploaded = chunk.Offset + bodySize;
+                if (!chunk.IsLastChunk)
+                {
+                    await SendUploadStatusAsync(agentId, uploadId, targetPath, currentUploaded, chunk.TotalBytes, "Uploading", checksumAlgorithm);
+                    return;
+                }
+
+                if (IsChecksumEnabled(checksumAlgorithm))
+                {
+                    await SendUploadStatusAsync(agentId, uploadId, targetPath, currentUploaded, chunk.TotalBytes, "Verifying", checksumAlgorithm);
+
+                    if (string.IsNullOrWhiteSpace(chunk.SourceChecksum) || !File.Exists(tempPath))
+                    {
+                        await SendUploadStatusAsync(agentId, uploadId, targetPath, currentUploaded, chunk.TotalBytes, "ChecksumFailed", checksumAlgorithm, "Khong co checksum de doi chieu.");
+                        return;
+                    }
+
+                    string actualChecksum = await ComputeFileChecksumAsync(tempPath, checksumAlgorithm, token);
+                    if (!string.Equals(actualChecksum, chunk.SourceChecksum, StringComparison.OrdinalIgnoreCase))
+                    {
+                        await SendUploadStatusAsync(agentId, uploadId, targetPath, currentUploaded, chunk.TotalBytes, "ChecksumFailed", checksumAlgorithm, "Checksum khong khop.");
+                        return;
+                    }
+                }
+
+                File.Move(tempPath, targetPath, true);
+                string finalStatus = IsChecksumEnabled(checksumAlgorithm) ? "ChecksumMatched" : "Completed";
+                await SendUploadStatusAsync(agentId, uploadId, targetPath, chunk.TotalBytes, chunk.TotalBytes, finalStatus, checksumAlgorithm);
+            }
+            catch (Exception ex)
+            {
+                if (chunk != null)
+                {
+                    if (!bodyCopyStarted && bodySize > 0)
+                    {
+                        try
+                        {
+                            await TransferFrameProtocol.DrainExactAsync(stream, bodySize, token);
+                        }
+                        catch
+                        {
+                            throw;
+                        }
+                    }
+
+                    string agentId = string.IsNullOrWhiteSpace(chunk.AgentID)
+                        ? HardwareInfo.GetUniqueAgentID()
+                        : chunk.AgentID;
+                    long uploadedBytes = Math.Max(0, chunk.Offset);
+                    try
+                    {
+                        await SendUploadStatusAsync(agentId, chunk.DownloadID, chunk.RemotePath, uploadedBytes, chunk.TotalBytes, "Error", chunk.ChecksumAlgorithm, ex.Message);
+                    }
+                    catch
+                    {
+                        if (bodyCopyStarted && !bodyCopyCompleted)
+                        {
+                            throw;
+                        }
+                    }
+                }
+
+                if (bodyCopyStarted && !bodyCopyCompleted)
+                {
+                    throw;
+                }
+            }
+        }
+
+        private static bool IsChecksumEnabled(string? algorithm)
+        {
+            return string.Equals(algorithm, "MD5", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(algorithm, "SHA256", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(algorithm, "SHA-256", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string NormalizeChecksumAlgorithm(string? algorithm)
+        {
+            if (string.Equals(algorithm, "MD5", StringComparison.OrdinalIgnoreCase))
+            {
+                return "MD5";
+            }
+
+            if (string.Equals(algorithm, "SHA256", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(algorithm, "SHA-256", StringComparison.OrdinalIgnoreCase))
+            {
+                return "SHA256";
+            }
+
+            return "None";
+        }
+
+        private static HashAlgorithm CreateHashAlgorithm(string algorithm)
+        {
+            return string.Equals(algorithm, "MD5", StringComparison.OrdinalIgnoreCase)
+                ? MD5.Create()
+                : SHA256.Create();
+        }
+
+        private static async Task<string> ComputeFileChecksumAsync(string filePath, string algorithm, CancellationToken token)
+        {
+            algorithm = NormalizeChecksumAlgorithm(algorithm);
+            if (!IsChecksumEnabled(algorithm))
+            {
+                return string.Empty;
+            }
+
+            const int checksumBufferSize = 1024 * 1024;
+            await using FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, checksumBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            using HashAlgorithm hash = CreateHashAlgorithm(algorithm);
+            byte[] result = await hash.ComputeHashAsync(fs, token);
+            return Convert.ToHexString(result);
+        }
+
         private async Task SendRemoteFolderFilesAsync(string agentId, string requestData)
         {
             RemoteFolderFilesRequest? request = null;
@@ -509,6 +716,159 @@ namespace AgentService
                 AgentID = agentId,
                 Data = JsonSerializer.Serialize(response)
             });
+        }
+
+        private async Task SendRemoteFileActionResponseAsync(string agentId, RemoteFileActionResponse response)
+        {
+            await SendPacketAsync(new SocketPacket
+            {
+                Type = "REMOTE_FILE_ACTION_RESPONSE",
+                AgentID = agentId,
+                Data = JsonSerializer.Serialize(response)
+            });
+        }
+
+        private async Task HandleRemoteDeleteAsync(string agentId, string requestData)
+        {
+            RemoteDeleteRequest? request = null;
+            var response = new RemoteFileActionResponse();
+
+            try
+            {
+                request = JsonSerializer.Deserialize<RemoteDeleteRequest>(requestData);
+                response.RequestID = request?.RequestID ?? string.Empty;
+
+                if (request == null || request.Items.Count == 0)
+                {
+                    response.Errors.Add("Khong co muc nao de xoa.");
+                }
+                else
+                {
+                    foreach (RemoteFileActionItem item in request.Items)
+                    {
+                        string path = item.FullPath;
+                        try
+                        {
+                            if (item.IsFolder || Directory.Exists(path))
+                            {
+                                if (!Directory.Exists(path))
+                                {
+                                    response.Errors.Add($"{path}: Thu muc khong ton tai.");
+                                    continue;
+                                }
+
+                                Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(
+                                    path,
+                                    Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                                    Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                            }
+                            else
+                            {
+                                if (!File.Exists(path))
+                                {
+                                    response.Errors.Add($"{path}: File khong ton tai.");
+                                    continue;
+                                }
+
+                                Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
+                                    path,
+                                    Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                                    Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                            }
+
+                            response.Paths.Add(path);
+                        }
+                        catch (Exception ex)
+                        {
+                            response.Errors.Add($"{path}: {ex.Message}");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                response.RequestID = request?.RequestID ?? string.Empty;
+                response.Errors.Add(ex.Message);
+            }
+
+            response.Success = response.Errors.Count == 0;
+            response.Message = response.Success
+                ? $"Da xoa {response.Paths.Count} muc tren Agent."
+                : $"Da xoa {response.Paths.Count} muc, loi {response.Errors.Count} muc.";
+
+            await SendRemoteFileActionResponseAsync(agentId, response);
+        }
+
+        private async Task HandleRemoteOpenAsync(string agentId, string requestData)
+        {
+            RemoteOpenRequest? request = null;
+            var response = new RemoteFileActionResponse();
+
+            try
+            {
+                request = JsonSerializer.Deserialize<RemoteOpenRequest>(requestData);
+                response.RequestID = request?.RequestID ?? string.Empty;
+
+                string path = request?.FullPath ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    response.Errors.Add("Duong dan file rong.");
+                }
+                else if (!File.Exists(path) && !Directory.Exists(path))
+                {
+                    response.Errors.Add($"{path}: File/folder khong ton tai.");
+                }
+                else
+                {
+                    Process.Start(new ProcessStartInfo(path)
+                    {
+                        UseShellExecute = true
+                    });
+
+                    response.Paths.Add(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                response.RequestID = request?.RequestID ?? string.Empty;
+                response.Errors.Add(ex.Message);
+            }
+
+            response.Success = response.Errors.Count == 0;
+            response.Message = response.Success ? "Da gui lenh mo file/folder tren Agent." : "Khong the mo file/folder tren Agent.";
+            await SendRemoteFileActionResponseAsync(agentId, response);
+        }
+
+        private async Task HandleRemoteCreateDirectoryAsync(string agentId, string requestData)
+        {
+            RemoteCreateDirectoryRequest? request = null;
+            var response = new RemoteFileActionResponse();
+
+            try
+            {
+                request = JsonSerializer.Deserialize<RemoteCreateDirectoryRequest>(requestData);
+                response.RequestID = request?.RequestID ?? string.Empty;
+
+                string path = request?.FullPath ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    response.Errors.Add("Duong dan thu muc rong.");
+                }
+                else
+                {
+                    Directory.CreateDirectory(path);
+                    response.Paths.Add(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                response.RequestID = request?.RequestID ?? string.Empty;
+                response.Errors.Add(ex.Message);
+            }
+
+            response.Success = response.Errors.Count == 0;
+            response.Message = response.Success ? "Da tao thu muc tren Agent." : "Khong the tao thu muc tren Agent.";
+            await SendRemoteFileActionResponseAsync(agentId, response);
         }
 
         private IEnumerable<string> EnumerateFilesSafe(string rootPath, List<string> errors)
@@ -603,13 +963,28 @@ namespace AgentService
             {
                 while (_isConnected && !token.IsCancellationRequested && _stream != null)
                 {
-                    int bytesRead = await _stream.ReadAsync(sizeBuffer, 0, 4, token);
+                    int bytesRead = await TransferFrameProtocol.ReadExactOrEndAsync(_stream, sizeBuffer, 0, 4, token);
                     if (bytesRead == 0) break; // Server chủ động ngắt kết nối
 
                     int packetSize = BitConverter.ToInt32(sizeBuffer, 0);
-                    byte[] dataBuffer = new byte[packetSize];
+                    if (packetSize <= 0)
+                    {
+                        throw new InvalidDataException("Invalid packet size.");
+                    }
 
-                    int totalBytesReceived = 0;
+                    byte[] firstByteBuffer = new byte[1];
+                    await TransferFrameProtocol.ReadExactAsync(_stream, firstByteBuffer, 0, 1, token);
+
+                    if (firstByteBuffer[0] == TransferFrameProtocol.BinaryUploadChunkMarker)
+                    {
+                        await HandleBinaryUploadChunkAsync(_stream, packetSize, token);
+                        continue;
+                    }
+
+                    byte[] dataBuffer = new byte[packetSize];
+                    dataBuffer[0] = firstByteBuffer[0];
+
+                    int totalBytesReceived = 1;
                     while (totalBytesReceived < packetSize)
                     {
                         int read = await _stream.ReadAsync(dataBuffer, totalBytesReceived, packetSize - totalBytesReceived, token);
@@ -745,13 +1120,30 @@ namespace AgentService
             {
                 while (_isConnected && !token.IsCancellationRequested && _stream != null)
                 {
-                    int bytesRead = await _stream.ReadAsync(sizeBuffer, 0, 4, token);
+                    int bytesRead = await TransferFrameProtocol.ReadExactOrEndAsync(_stream, sizeBuffer, 0, 4, token);
                     if (bytesRead == 0) break; // Server chủ động ngắt kết nối
 
-                    int packetSize = BitConverter.ToInt32(sizeBuffer, 0);
-                    byte[] dataBuffer = new byte[packetSize];
+                    if (bytesRead != 4) throw new EndOfStreamException("Socket closed before packet size was fully received.");
 
-                    int totalBytesReceived = 0;
+                    int packetSize = BitConverter.ToInt32(sizeBuffer, 0);
+                    if (packetSize <= 0)
+                    {
+                        throw new InvalidDataException("Invalid packet size.");
+                    }
+
+                    byte[] firstByteBuffer = new byte[1];
+                    await TransferFrameProtocol.ReadExactAsync(_stream, firstByteBuffer, 0, 1, token);
+
+                    if (firstByteBuffer[0] == TransferFrameProtocol.BinaryUploadChunkMarker)
+                    {
+                        await HandleBinaryUploadChunkAsync(_stream, packetSize, token);
+                        continue;
+                    }
+
+                    byte[] dataBuffer = new byte[packetSize];
+                    dataBuffer[0] = firstByteBuffer[0];
+
+                    int totalBytesReceived = 1;
                     while (totalBytesReceived < packetSize)
                     {
                         int read = await _stream.ReadAsync(dataBuffer, totalBytesReceived, packetSize - totalBytesReceived, token);
@@ -764,6 +1156,12 @@ namespace AgentService
 
                     if (packet != null)
                     {
+                        if (AgentUpdateClient.IsUpdatePacket(packet.Type))
+                        {
+                            await _updateClient.HandlePacketAsync(packet, token);
+                            continue;
+                        }
+
                         _logger?.LogInformation("Nhận lệnh từ Server: {Type}", packet.Type);
 
                         // ====================================================================
@@ -802,6 +1200,10 @@ namespace AgentService
 
                                         FileInfo fileInfo = new FileInfo(filePath);
                                         totalBytes = fileInfo.Length;
+                                        string checksumAlgorithm = NormalizeChecksumAlgorithm(request.ChecksumAlgorithm);
+                                        string sourceChecksum = IsChecksumEnabled(checksumAlgorithm)
+                                            ? await ComputeFileChecksumAsync(filePath, checksumAlgorithm, token)
+                                            : string.Empty;
 
                                         if (totalBytes == 0)
                                         {
@@ -813,7 +1215,9 @@ namespace AgentService
                                                 Offset = 0,
                                                 ChunkSize = 0,
                                                 IsLastChunk = true,
-                                                Base64Data = string.Empty
+                                                Base64Data = string.Empty,
+                                                ChecksumAlgorithm = checksumAlgorithm,
+                                                SourceChecksum = sourceChecksum
                                             };
 
                                             await SendDownloadChunkAsync(emptyChunk, Array.Empty<byte>(), 0, token);
@@ -821,6 +1225,25 @@ namespace AgentService
                                         }
 
                                         // Định nghĩa kích thước mỗi khối băm nhỏ (Buffer Size = 256KB tăng tốc độ truyền tải)
+                                        if (currentOffset >= totalBytes)
+                                        {
+                                            var completedChunk = new FileChunkPacket
+                                            {
+                                                DownloadID = request.DownloadID,
+                                                RemotePath = filePath,
+                                                TotalBytes = totalBytes,
+                                                Offset = totalBytes,
+                                                ChunkSize = 0,
+                                                IsLastChunk = true,
+                                                Base64Data = string.Empty,
+                                                ChecksumAlgorithm = checksumAlgorithm,
+                                                SourceChecksum = sourceChecksum
+                                            };
+
+                                            await SendDownloadChunkAsync(completedChunk, Array.Empty<byte>(), 0, token);
+                                            return;
+                                        }
+
                                         int bufferSize = 1024 * 1024;
                                         byte[] buffer = new byte[bufferSize];
 
@@ -844,10 +1267,16 @@ namespace AgentService
                                                     Offset = currentOffset,
                                                     ChunkSize = bytesRead,
                                                     IsLastChunk = (currentOffset + bytesRead >= totalBytes), // Đánh dấu nếu là mảnh cuối [cite: 15]
-                                                    Base64Data = string.Empty
+                                                    Base64Data = string.Empty,
+                                                    ChecksumAlgorithm = checksumAlgorithm
                                                 };
 
                                                 // Gói vào SocketPacket chung để bắn lên mạng
+                                                if (chunk.IsLastChunk)
+                                                {
+                                                    chunk.SourceChecksum = sourceChecksum;
+                                                }
+
                                                 await SendDownloadChunkAsync(chunk, buffer, bytesRead, token);
 
                                                 // Cập nhật lại vị trí dịch chuyển tiếp theo [cite: 6]
@@ -880,6 +1309,33 @@ namespace AgentService
                             _ = Task.Run(async () =>
                             {
                                 await SendRemoteFolderFilesAsync(packet.AgentID, requestData);
+                            });
+                        }
+
+                        if (packet.Type == "DELETE_REMOTE_ITEMS")
+                        {
+                            string requestData = packet.Data;
+                            _ = Task.Run(async () =>
+                            {
+                                await HandleRemoteDeleteAsync(packet.AgentID, requestData);
+                            });
+                        }
+
+                        if (packet.Type == "OPEN_REMOTE_FILE")
+                        {
+                            string requestData = packet.Data;
+                            _ = Task.Run(async () =>
+                            {
+                                await HandleRemoteOpenAsync(packet.AgentID, requestData);
+                            });
+                        }
+
+                        if (packet.Type == "CREATE_REMOTE_DIRECTORY")
+                        {
+                            string requestData = packet.Data;
+                            _ = Task.Run(async () =>
+                            {
+                                await HandleRemoteCreateDirectoryAsync(packet.AgentID, requestData);
                             });
                         }
 

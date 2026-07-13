@@ -28,6 +28,26 @@ namespace AgentControl
             return connection;
         }
 
+        private static async Task EnsureColumnExistsAsync(SQLiteConnection connection, string tableName, string columnName, string columnDefinition)
+        {
+            using (var cmd = new SQLiteCommand($"PRAGMA table_info({tableName});", connection))
+            using (var reader = await cmd.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                {
+                    if (string.Equals(reader["name"]?.ToString(), columnName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return;
+                    }
+                }
+            }
+
+            using (var alterCmd = new SQLiteCommand($"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnDefinition};", connection))
+            {
+                await alterCmd.ExecuteNonQueryAsync();
+            }
+        }
+
         // Hàm khởi tạo Database (Tự động chạy khi Server mở lên)
         public static async Task InitializeDatabaseAsync()
         {
@@ -51,6 +71,7 @@ namespace AgentControl
                 IPAddress TEXT,
                 OSVersion TEXT,
                 AgentVersion TEXT,
+                OwnerName TEXT DEFAULT '',
                 FirstConnectTime TEXT,
                 LastSeen TEXT,
                 Status TEXT DEFAULT 'Offline'
@@ -75,6 +96,7 @@ namespace AgentControl
                 TotalBytes INTEGER DEFAULT 0,
                 DownloadedBytes INTEGER DEFAULT 0,
                 Status TEXT DEFAULT 'Waiting',
+                ChecksumAlgorithm TEXT DEFAULT 'None',
                 CreatedTime TEXT,
                 UpdatedTime TEXT
             );";
@@ -91,6 +113,10 @@ namespace AgentControl
                         cmd.CommandText = createDownloadQueueTable;
                         await cmd.ExecuteNonQueryAsync();
                     }
+
+                    await EnsureColumnExistsAsync(connection, "Agents", "AgentVersion", "TEXT DEFAULT ''");
+                    await EnsureColumnExistsAsync(connection, "Agents", "OwnerName", "TEXT DEFAULT ''");
+                    await EnsureColumnExistsAsync(connection, "DownloadQueue", "ChecksumAlgorithm", "TEXT DEFAULT 'None'");
                 }
             }
             finally
@@ -198,6 +224,49 @@ namespace AgentControl
         }
 
         // Hàm lấy toàn bộ danh sách Agent đã từng kết nối trong DB lên để nạp vào giao diện lúc mở app
+        public static async Task UpdateAgentOwnerNameAsync(string agentID, string ownerName)
+        {
+            await DbLock.WaitAsync();
+            try
+            {
+                using (var connection = await OpenConnectionAsync())
+                {
+                    string updateQuery = "UPDATE Agents SET OwnerName = @OwnerName WHERE AgentID = @AgentID;";
+                    using (var cmd = new SQLiteCommand(updateQuery, connection))
+                    {
+                        cmd.Parameters.AddWithValue("@AgentID", agentID);
+                        cmd.Parameters.AddWithValue("@OwnerName", ownerName ?? string.Empty);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+            }
+            finally
+            {
+                DbLock.Release();
+            }
+        }
+
+        public static async Task DeleteAgentAsync(string agentID)
+        {
+            await DbLock.WaitAsync();
+            try
+            {
+                using (var connection = await OpenConnectionAsync())
+                {
+                    string deleteQuery = "DELETE FROM Agents WHERE AgentID = @AgentID;";
+                    using (var cmd = new SQLiteCommand(deleteQuery, connection))
+                    {
+                        cmd.Parameters.AddWithValue("@AgentID", agentID);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+            }
+            finally
+            {
+                DbLock.Release();
+            }
+        }
+
         public static async Task<List<Dictionary<string, string>>> GetAllAgentsAsync()
         {
             var agentList = new List<Dictionary<string, string>>();
@@ -222,6 +291,7 @@ namespace AgentControl
                                 { "IPAddress", reader["IPAddress"].ToString() },
                                 { "OSVersion", reader["OSVersion"].ToString() },
                                 { "AgentVersion", reader["AgentVersion"].ToString() },
+                                { "OwnerName", reader["OwnerName"].ToString() },
                                 { "FirstConnectTime", reader["FirstConnectTime"].ToString() },
                                 { "LastSeen", reader["LastSeen"].ToString() },
                                 { "Status", reader["Status"].ToString() }
@@ -238,7 +308,7 @@ namespace AgentControl
 
             return agentList;
         }
-        public static async Task AddToDownloadQueueAsync(string downloadId, string agentId, string remotePath, string localPath, long totalBytes)
+        public static async Task AddToDownloadQueueAsync(string downloadId, string agentId, string remotePath, string localPath, long totalBytes, string checksumAlgorithm = "None")
         {
             await DbLock.WaitAsync();
             try
@@ -246,8 +316,8 @@ namespace AgentControl
                 using (var connection = await OpenConnectionAsync())
                 {
                     string insertQuery = @"
-            INSERT INTO DownloadQueue (DownloadID, AgentID, RemotePath, LocalPath, TotalBytes, DownloadedBytes, Status, CreatedTime, UpdatedTime)
-            VALUES (@DownloadID, @AgentID, @RemotePath, @LocalPath, @TotalBytes, 0, 'Waiting', @Time, @Time);";
+            INSERT INTO DownloadQueue (DownloadID, AgentID, RemotePath, LocalPath, TotalBytes, DownloadedBytes, Status, ChecksumAlgorithm, CreatedTime, UpdatedTime)
+            VALUES (@DownloadID, @AgentID, @RemotePath, @LocalPath, @TotalBytes, 0, 'Waiting', @ChecksumAlgorithm, @Time, @Time);";
 
                     using (var cmd = new SQLiteCommand(insertQuery, connection))
                     {
@@ -256,6 +326,7 @@ namespace AgentControl
                         cmd.Parameters.AddWithValue("@RemotePath", remotePath);
                         cmd.Parameters.AddWithValue("@LocalPath", localPath);
                         cmd.Parameters.AddWithValue("@TotalBytes", totalBytes);
+                        cmd.Parameters.AddWithValue("@ChecksumAlgorithm", string.IsNullOrWhiteSpace(checksumAlgorithm) ? "None" : checksumAlgorithm);
                         cmd.Parameters.AddWithValue("@Time", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
                         await cmd.ExecuteNonQueryAsync();
                     }
@@ -279,7 +350,7 @@ namespace AgentControl
             UPDATE DownloadQueue
             SET DownloadedBytes = CASE WHEN @DownloadedBytes > DownloadedBytes THEN @DownloadedBytes ELSE DownloadedBytes END,
                 Status = CASE
-                    WHEN Status = 'Completed' THEN Status
+                    WHEN Status = 'Completed' OR Status = 'ChecksumMatched' OR Status = 'ChecksumFailed' THEN Status
                     ELSE @Status
                 END,
                 UpdatedTime = @Time
@@ -317,8 +388,11 @@ namespace AgentControl
                 END,
                 TotalBytes = CASE WHEN @TotalBytes > 0 THEN @TotalBytes ELSE TotalBytes END,
                 Status = CASE
-                    WHEN Status = 'Completed' THEN Status
+                    WHEN Status = 'Completed' OR Status = 'ChecksumMatched' OR Status = 'ChecksumFailed' THEN Status
                     WHEN @Status = 'Completed' THEN 'Completed'
+                    WHEN @Status = 'Verifying' THEN 'Verifying'
+                    WHEN @Status = 'ChecksumMatched' THEN 'ChecksumMatched'
+                    WHEN @Status = 'ChecksumFailed' THEN 'ChecksumFailed'
                     WHEN @TotalBytes > 0 AND @DownloadedBytes >= @TotalBytes THEN 'Completed'
                     ELSE @Status
                 END,
@@ -378,6 +452,28 @@ namespace AgentControl
                         cmd.Parameters.AddWithValue("@DownloadID", downloadId);
                         var result = await cmd.ExecuteScalarAsync();
                         return result != null ? result.ToString() : string.Empty;
+                    }
+                }
+            }
+            finally
+            {
+                DbLock.Release();
+            }
+        }
+
+        public static async Task<string> GetChecksumAlgorithmByDownloadIdAsync(string downloadId)
+        {
+            await DbLock.WaitAsync();
+            try
+            {
+                using (var connection = await OpenConnectionAsync())
+                {
+                    string selectQuery = "SELECT ChecksumAlgorithm FROM DownloadQueue WHERE DownloadID = @DownloadID;";
+                    using (var cmd = new SQLiteCommand(selectQuery, connection))
+                    {
+                        cmd.Parameters.AddWithValue("@DownloadID", downloadId);
+                        var result = await cmd.ExecuteScalarAsync();
+                        return result != null ? result.ToString() ?? "None" : "None";
                     }
                 }
             }
@@ -515,10 +611,10 @@ namespace AgentControl
                 {
 
                     string selectQuery = @"
-            SELECT DownloadID, RemotePath, DownloadedBytes
+            SELECT DownloadID, RemotePath, DownloadedBytes, ChecksumAlgorithm
             FROM DownloadQueue
             WHERE AgentID = @AgentID
-              AND Status IN ('Waiting Agent', 'Downloading', 'Waiting')
+              AND Status IN ('Waiting Agent', 'Downloading', 'Waiting', 'Verifying')
               AND DownloadedBytes >= 0;";
 
                     using (var cmd = new SQLiteCommand(selectQuery, connection))
@@ -534,7 +630,8 @@ namespace AgentControl
                                     RemotePath = reader["RemotePath"].ToString(),
 
                                     // 🔥 SỬA TẠI ĐÂY: Đổi từ 'Offset' thành 'DownloadedBytes' cho đúng thuộc tính của Class
-                                    DownloadedBytes = Convert.ToInt64(reader["DownloadedBytes"])
+                                    DownloadedBytes = Convert.ToInt64(reader["DownloadedBytes"]),
+                                    ChecksumAlgorithm = reader["ChecksumAlgorithm"]?.ToString() ?? "None"
                                 });
                             }
                         }
@@ -558,7 +655,7 @@ namespace AgentControl
             {
                 using (var connection = await OpenConnectionAsync())
                 {
-                    string selectQuery = "SELECT DownloadID, RemotePath, TotalBytes, DownloadedBytes, Status FROM DownloadQueue ORDER BY UpdatedTime DESC;";
+                    string selectQuery = "SELECT DownloadID, RemotePath, TotalBytes, DownloadedBytes, Status, ChecksumAlgorithm FROM DownloadQueue ORDER BY UpdatedTime DESC;";
                     using (var cmd = new SQLiteCommand(selectQuery, connection))
                     {
                         using (var adapter = new SQLiteDataAdapter(cmd))
@@ -588,7 +685,7 @@ namespace AgentControl
                 {
 
                     // Lấy tất cả các file trong hàng đợi, sắp xếp theo thời gian hoặc ID
-                    string sql = "SELECT DownloadID, RemotePath, LocalPath, TotalBytes, DownloadedBytes, Status FROM DownloadQueue;";
+                    string sql = "SELECT DownloadID, RemotePath, LocalPath, TotalBytes, DownloadedBytes, Status, ChecksumAlgorithm FROM DownloadQueue;";
 
                     using (var cmd = new SQLiteCommand(sql, connection))
                     {
@@ -604,7 +701,8 @@ namespace AgentControl
                                     // Ép kiểu chính xác sang long cho dung lượng và tiến độ
                                     TotalBytes = reader["TotalBytes"] != DBNull.Value ? Convert.ToInt64(reader["TotalBytes"]) : 0,
                                     DownloadedBytes = reader["DownloadedBytes"] != DBNull.Value ? Convert.ToInt64(reader["DownloadedBytes"]) : 0,
-                                    Status = reader["Status"].ToString()
+                                    Status = reader["Status"].ToString(),
+                                    ChecksumAlgorithm = reader["ChecksumAlgorithm"]?.ToString() ?? "None"
                                 });
                             }
                         }

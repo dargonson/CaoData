@@ -46,6 +46,7 @@ namespace AgentShared
     // 4. Gói tin chứa mảnh dữ liệu cắt nhỏ (Agent -> Server)
     public class FileChunkPacket
     {
+        public string AgentID { get; set; } = string.Empty;
         public string DownloadID { get; set; } = string.Empty;   // Mã GUID định danh luồng tải này
         public string RemotePath { get; set; } = string.Empty;   // Đường dẫn file trên Agent
         public long TotalBytes { get; set; }                    // Tổng kích thước file
@@ -53,6 +54,19 @@ namespace AgentShared
         public int ChunkSize { get; set; }                      // Độ dài thực của mảng byte đợt này
         public bool IsLastChunk { get; set; }                   // Đánh dấu đây có phải khúc cuối cùng chưa
         public string Base64Data { get; set; } = string.Empty;  // Dữ liệu nhị phân băm nhỏ đã chuyển sang chuỗi Base64
+        public string ChecksumAlgorithm { get; set; } = "None";
+        public string SourceChecksum { get; set; } = string.Empty;
+    }
+
+    public class UploadStatusPacket
+    {
+        public string UploadID { get; set; } = string.Empty;
+        public string RemotePath { get; set; } = string.Empty;
+        public long TotalBytes { get; set; }
+        public long UploadedBytes { get; set; }
+        public string Status { get; set; } = string.Empty;
+        public string ErrorMessage { get; set; } = string.Empty;
+        public string ChecksumAlgorithm { get; set; } = "None";
     }
 
     public class DownloadErrorPacket
@@ -83,5 +97,38 @@ namespace AgentShared
         public string RemotePath { get; set; } = string.Empty;
         public string RelativePath { get; set; } = string.Empty;
         public long Size { get; set; }
+    }
+
+    public class RemoteFileActionItem
+    {
+        public string FullPath { get; set; } = string.Empty;
+        public bool IsFolder { get; set; }
+    }
+
+    public class RemoteDeleteRequest
+    {
+        public string RequestID { get; set; } = string.Empty;
+        public List<RemoteFileActionItem> Items { get; set; } = new List<RemoteFileActionItem>();
+    }
+
+    public class RemoteOpenRequest
+    {
+        public string RequestID { get; set; } = string.Empty;
+        public string FullPath { get; set; } = string.Empty;
+    }
+
+    public class RemoteCreateDirectoryRequest
+    {
+        public string RequestID { get; set; } = string.Empty;
+        public string FullPath { get; set; } = string.Empty;
+    }
+
+    public class RemoteFileActionResponse
+    {
+        public string RequestID { get; set; } = string.Empty;
+        public bool Success { get; set; }
+        public string Message { get; set; } = string.Empty;
+        public List<string> Paths { get; set; } = new List<string>();
+        public List<string> Errors { get; set; } = new List<string>();
     }
 }
