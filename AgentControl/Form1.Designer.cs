@@ -59,6 +59,7 @@
             ColDate = new ColumnHeader();
             panel1 = new Panel();
             panel2 = new Panel();
+            btnSetBackup = new Button();
             panelHeader.SuspendLayout();
             groupBox1.SuspendLayout();
             grbchecksum.SuspendLayout();
@@ -74,6 +75,7 @@
             // 
             panelHeader.AutoSize = true;
             panelHeader.Controls.Add(groupBox1);
+            panelHeader.Controls.Add(btnSetBackup);
             panelHeader.Controls.Add(btnupload);
             panelHeader.Controls.Add(lblver);
             panelHeader.Controls.Add(txtxoa);
@@ -86,7 +88,7 @@
             panelHeader.Location = new Point(0, 0);
             panelHeader.MaximumSize = new Size(0, 60);
             panelHeader.Name = "panelHeader";
-            panelHeader.Size = new Size(1747, 57);
+            panelHeader.Size = new Size(1747, 58);
             panelHeader.TabIndex = 0;
             // 
             // groupBox1
@@ -126,9 +128,9 @@
             // 
             // btnupload
             // 
-            btnupload.Location = new Point(574, 11);
+            btnupload.Location = new Point(536, 12);
             btnupload.Name = "btnupload";
-            btnupload.Size = new Size(124, 42);
+            btnupload.Size = new Size(103, 42);
             btnupload.TabIndex = 7;
             btnupload.Text = "Upload";
             btnupload.UseVisualStyleBackColor = true;
@@ -208,9 +210,9 @@
             // 
             // btnKetNoi
             // 
-            btnKetNoi.Location = new Point(312, 12);
+            btnKetNoi.Location = new Point(316, 13);
             btnKetNoi.Name = "btnKetNoi";
-            btnKetNoi.Size = new Size(126, 42);
+            btnKetNoi.Size = new Size(105, 42);
             btnKetNoi.TabIndex = 2;
             btnKetNoi.Text = "Kết Nối";
             btnKetNoi.UseVisualStyleBackColor = true;
@@ -218,9 +220,9 @@
             // 
             // btnCopy
             // 
-            btnCopy.Location = new Point(444, 12);
+            btnCopy.Location = new Point(427, 12);
             btnCopy.Name = "btnCopy";
-            btnCopy.Size = new Size(124, 42);
+            btnCopy.Size = new Size(103, 42);
             btnCopy.TabIndex = 1;
             btnCopy.Text = "Download";
             btnCopy.UseVisualStyleBackColor = true;
@@ -240,9 +242,9 @@
             // 
             panelZone1.Controls.Add(ListboxAgents);
             panelZone1.Dock = DockStyle.Left;
-            panelZone1.Location = new Point(0, 57);
+            panelZone1.Location = new Point(0, 58);
             panelZone1.Name = "panelZone1";
-            panelZone1.Size = new Size(291, 604);
+            panelZone1.Size = new Size(291, 603);
             panelZone1.TabIndex = 1;
             // 
             // ListboxAgents
@@ -262,7 +264,7 @@
             ListboxAgents.Name = "ListboxAgents";
             ListboxAgents.NormalCardColor = Color.White;
             ListboxAgents.SelectedCardColor = Color.FromArgb(205, 220, 242);
-            ListboxAgents.Size = new Size(291, 604);
+            ListboxAgents.Size = new Size(291, 603);
             ListboxAgents.TabIndex = 4;
             ListboxAgents.SelectedIndexChanged += ListboxAgents_SelectedIndexChanged;
             // 
@@ -270,9 +272,9 @@
             // 
             panelZone2.Controls.Add(tvRemoteFolders);
             panelZone2.Dock = DockStyle.Left;
-            panelZone2.Location = new Point(291, 57);
+            panelZone2.Location = new Point(291, 58);
             panelZone2.Name = "panelZone2";
-            panelZone2.Size = new Size(294, 604);
+            panelZone2.Size = new Size(294, 603);
             panelZone2.TabIndex = 2;
             // 
             // tvRemoteFolders
@@ -281,7 +283,7 @@
             tvRemoteFolders.Dock = DockStyle.Fill;
             tvRemoteFolders.Location = new Point(0, 0);
             tvRemoteFolders.Name = "tvRemoteFolders";
-            tvRemoteFolders.Size = new Size(294, 604);
+            tvRemoteFolders.Size = new Size(294, 603);
             tvRemoteFolders.TabIndex = 0;
             tvRemoteFolders.BeforeCollapse += tvRemoteFolders_BeforeCollapse;
             tvRemoteFolders.BeforeExpand += tvRemoteFolders_BeforeExpand;
@@ -293,7 +295,7 @@
             dvgUploads.Dock = DockStyle.Fill;
             dvgUploads.Location = new Point(0, 0);
             dvgUploads.Name = "dvgUploads";
-            dvgUploads.Size = new Size(693, 604);
+            dvgUploads.Size = new Size(693, 603);
             dvgUploads.TabIndex = 8;
             // 
             // dgvDownloads
@@ -302,7 +304,7 @@
             dgvDownloads.Dock = DockStyle.Fill;
             dgvDownloads.Location = new Point(0, 0);
             dgvDownloads.Name = "dgvDownloads";
-            dgvDownloads.Size = new Size(693, 604);
+            dgvDownloads.Size = new Size(693, 603);
             dgvDownloads.TabIndex = 4;
             // 
             // tmrUpdateUI
@@ -318,7 +320,7 @@
             lvRemoteFiles.GridLines = true;
             lvRemoteFiles.Location = new Point(0, 0);
             lvRemoteFiles.Name = "lvRemoteFiles";
-            lvRemoteFiles.Size = new Size(469, 604);
+            lvRemoteFiles.Size = new Size(469, 603);
             lvRemoteFiles.TabIndex = 3;
             lvRemoteFiles.UseCompatibleStateImageBehavior = false;
             lvRemoteFiles.View = View.Details;
@@ -347,9 +349,9 @@
             // 
             panel1.Controls.Add(lvRemoteFiles);
             panel1.Dock = DockStyle.Left;
-            panel1.Location = new Point(585, 57);
+            panel1.Location = new Point(585, 58);
             panel1.Name = "panel1";
-            panel1.Size = new Size(469, 604);
+            panel1.Size = new Size(469, 603);
             panel1.TabIndex = 5;
             // 
             // panel2
@@ -357,10 +359,19 @@
             panel2.Controls.Add(dvgUploads);
             panel2.Controls.Add(dgvDownloads);
             panel2.Dock = DockStyle.Fill;
-            panel2.Location = new Point(1054, 57);
+            panel2.Location = new Point(1054, 58);
             panel2.Name = "panel2";
-            panel2.Size = new Size(693, 604);
+            panel2.Size = new Size(693, 603);
             panel2.TabIndex = 6;
+            // 
+            // btnSetBackup
+            // 
+            btnSetBackup.Location = new Point(645, 11);
+            btnSetBackup.Name = "btnSetBackup";
+            btnSetBackup.Size = new Size(103, 42);
+            btnSetBackup.TabIndex = 7;
+            btnSetBackup.Text = "Set Backup";
+            btnSetBackup.UseVisualStyleBackColor = true;
             // 
             // frmToolBackup
             // 
@@ -428,5 +439,6 @@
         private RadioButton radlistdown;
         private RadioButton radlistup;
         private DataGridView dvgUploads;
+        private Button btnSetBackup;
     }
 }
