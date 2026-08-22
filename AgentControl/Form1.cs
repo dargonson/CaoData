@@ -47,6 +47,8 @@ namespace AgentControl
         public frmToolBackup()
         {
             InitializeComponent();
+            DoubleBuffered = true;
+            ResizeRedraw = true;
             InitializeControlVersionLabel();
             btnupload.Click += btnupload_Click;
             ListboxAgents.AgentDeleteClicked += ListboxAgents_AgentDeleteClicked;
@@ -745,8 +747,8 @@ namespace AgentControl
 
         private async void Form1_Load(object sender, EventArgs e)
         {
-
-            this.Text="Tool Backup - ver " + ControlCurrentVersion;
+            
+            this.Text = "Tool Backup - ver " + ControlCurrentVersion;
             InitDownloadGrid();
             InitUploadGrid();
             if (!radlistdown.Checked && !radlistup.Checked)
@@ -812,17 +814,28 @@ namespace AgentControl
                 _isFormMovingOrSizing = true;
                 ListboxAgents?.SetVisualUpdatesSuspended(true);
             }
-            else if (m.Msg == WM_EXITSIZEMOVE)
-            {
-                _isFormMovingOrSizing = false;
-                ListboxAgents?.SetVisualUpdatesSuspended(false);
-                if (IsHandleCreated && !IsDisposed)
-                {
-                    BeginInvoke(new Action(() => tmrUpdateUI_Tick(this, EventArgs.Empty)));
-                }
-            }
 
             base.WndProc(ref m);
+
+            if (m.Msg == WM_EXITSIZEMOVE)
+            {
+                _isFormMovingOrSizing = false;
+                if (IsHandleCreated && !IsDisposed)
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        if (IsDisposed || !IsHandleCreated)
+                        {
+                            return;
+                        }
+
+                        ListboxAgents?.SetVisualUpdatesSuspended(false);
+                        Invalidate(true);
+                        Update();
+                        tmrUpdateUI_Tick(this, EventArgs.Empty);
+                    }));
+                }
+            }
         }
 
         private static string FormatVersionForDisplay(string? versionText)
@@ -4191,5 +4204,7 @@ namespace AgentControl
             dgvDownloads.Visible = radlistdown.Checked;
             dvgUploads.Visible = radlistup.Checked;
         }
+
+        
     }
 }

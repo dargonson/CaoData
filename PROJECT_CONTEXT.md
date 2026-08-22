@@ -384,4 +384,14 @@ git status --short --branch
   - Scroll `dgvDownloads`.
   - Click/scroll card Agent.
 - Download/upload/resume/checksum/update/delete van chay nhu truoc.
+
+## 11. Trang thai don sach giao dien Backup - 2026-08-22
+
+- Da don toan bo phan code tam lien quan den `frmSetBackup`, `btnSetBackup`, model/deploy backup va bang `BackupConfigs`; backup logic chua bat dau.
+- Giu nguyen cac thay doi layout/resource/config hien tai cua user tren `frmToolBackup`; cac file `frmSetBackup.*` van o trang thai da xoa theo thay doi cua user.
+- `tvRemoteFolders` da duoc bat checkbox de sau nay tan dung lam danh sach chon nguon backup, chua gan logic luu/deploy.
+- GroupBox `Backup` hien co: duong dan + Browse, chu ky backup, chu ky full backup, gio chay, exclude folder, exclude extension/pattern, nut Them/Xoa va nut gui cau hinh.
+- Da sua `NHFUiControls.ListBoxNHF` de forced redraw sau khi ket thuc `WM_SETREDRAW` va khong chan `WM_ERASEBKGND`, dong thoi bat double-buffer/ResizeRedraw cho form de xu ly ghost khi resize/restore cua `ListboxAgents`.
+- Da build `AgentControl` thanh cong, 0 error; cac warning nullable/field cu cua project van con nhu truoc. Chua code nghiep vu backup.
+- Da loai bo cac khai bao Designer khong duoc su dung (`lvAgents` va cot du lieu cu `A/B/C/D/E`); khong thay doi chuc nang dang chay.
 - Git tren `main`, status sach neu user yeu cau commit/push.

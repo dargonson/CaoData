@@ -19,6 +19,10 @@ namespace NHFUiControls
         private const int WM_VSCROLL = 0x0115;
         private const int WM_MOUSEWHEEL = 0x020A;
         private const int WM_MOUSEHWHEEL = 0x020E;
+        private const uint RDW_INVALIDATE = 0x0001;
+        private const uint RDW_ERASE = 0x0004;
+        private const uint RDW_ALLCHILDREN = 0x0080;
+        private const uint RDW_UPDATENOW = 0x0100;
         private readonly System.Windows.Forms.Timer scrollSettleTimer;
         private bool isScrolling;
         private bool visualUpdatesSuspended;
@@ -29,6 +33,9 @@ namespace NHFUiControls
 
         [DllImport("user32.dll")]
         private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern bool RedrawWindow(IntPtr hWnd, IntPtr lprcUpdate, IntPtr hrgnUpdate, uint flags);
 
         public event EventHandler<AgentDeleteClickedEventArgs>? AgentDeleteClicked;
         public event EventHandler<AgentOwnerEditRequestedEventArgs>? AgentOwnerEditRequested;
@@ -57,6 +64,7 @@ namespace NHFUiControls
         {
             // Giữ nguyên các dòng cấu hình cũ của fen...
             this.SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
+            DoubleBuffered = true;
             //DrawMode = DrawMode.OwnerDrawVariable;
             DrawMode = DrawMode.OwnerDrawFixed;
             CardHeight = 95;
@@ -108,7 +116,20 @@ namespace NHFUiControls
 
             if (!suspended)
             {
-                Invalidate();
+                // WM_SETREDRAW không tự xoá các pixel cũ sau khi cửa sổ vừa resize/restore.
+                // Ép vẽ lại toàn bộ card để tránh hiện tượng ảnh lưu/ghost trên ListboxAgents.
+                if (IsHandleCreated)
+                {
+                    RedrawWindow(
+                        Handle,
+                        IntPtr.Zero,
+                        IntPtr.Zero,
+                        RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+                }
+                else
+                {
+                    Invalidate();
+                }
             }
         }
 
@@ -208,7 +229,9 @@ namespace NHFUiControls
         {
             if (m.Msg == WM_ERASEBKGND)
             {
-                m.Result = IntPtr.Zero;
+                // Cho ListBox xóa nền thật sự khi vùng control vừa bị expose sau resize/restore.
+                // Chặn thông điệp này làm pixel của cửa sổ phía sau bị giữ lại thành ghost.
+                base.WndProc(ref m);
                 return;
             }
             if (m.Msg == WM_VSCROLL || m.Msg == WM_MOUSEWHEEL || m.Msg == WM_MOUSEHWHEEL)
