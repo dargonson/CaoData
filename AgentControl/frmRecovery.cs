@@ -464,8 +464,10 @@ namespace AgentControl
             }
             finally
             {
-                loading.Close();
+                // Tra lai kha nang nhan focus cho owner truoc khi dong cua so loading.
+                // Neu dong loading luc owner con Disabled, Windows co the kich hoat app khac.
                 if (!IsDisposed) Enabled = true;
+                loading.Close();
             }
         }
 

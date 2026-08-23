@@ -672,3 +672,10 @@ git status --short --branch
 - `ControlSecurityConfiguration` da bo `EphemeralKeySet`, nap private key vao user key store voi `UserKeySet | Exportable`. File PFX cu van dung duoc, khong can xoa certificate hay mat cau hinh.
 - Da bo sung regression test `PersistedTransportCertificate_CanAuthenticateSchannelServer`: tao/nap certificate, dispose, nap lai dung PFX tren dia, sau do bat tay that qua `TcpListener`/`TcpClient` va `SecureTransport` hai chieu.
 - Test moi tai hien dung EOF truoc khi sua va pass sau khi sua. Clean/build Debug: 0 error, 0 warning; build Release: 0 error, 0 warning; toan bo test Debug va Release: 58/58 pass moi cau hinh.
+
+### 17.11 Fix frmRecovery bi mat focus - 2026-08-23
+
+- Trieu chung: bam `btnrecovery` hoac doi ngay trong `cbxlistday` thi sau khi cua so loading dong, Windows tu chuyen foreground sang cua so khac nhu Alt+Tab.
+- Nguyen nhan: `RunWithLoadingAsync` dong `RecoveryLoadingForm` trong luc owner `frmRecovery` van `Enabled=false`; Windows khong co owner dang enabled de tra focus.
+- Da doi dung thu tu cleanup: bat lai `frmRecovery` truoc, sau do moi dong loading form. Khong dung `Activate()`/`SetForegroundWindow` cuong buc, nen khong giat focus neu nguoi dung chu dong chuyen sang ung dung khac trong luc nap lau.
+- Full solution Debug va Release build 0 error, 0 warning; toan bo test Debug va Release dat 58/58 moi cau hinh. Lan build Debug dau bi process dang chay khoa DLL, sau khi process dung da rebuild/test lai thanh cong.
