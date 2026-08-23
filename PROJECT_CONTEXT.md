@@ -68,8 +68,8 @@ Repo gom cac project chinh:
 - `AgentShared`
   - Shared models/protocol/version.
   - `AppVersion.cs` dang co:
-    - `CurrentVersionControl = "1.8"`
-    - `CurrentVersionAgent = "1.8"`
+    - `CurrentVersionControl = "1.10"`
+    - `CurrentVersionAgent = "1.10"`
     - `AgentUpdateRootDirectory = @"C:\ProgramData\CaoData\AgentServices\Updates"`
     - update marker/log constants.
 
@@ -765,3 +765,39 @@ git status --short --branch
 - UI Control luon hien template trong hai ListBox exclude. Neu user chon xoa mot muc bat buoc, muc do duoc them lai ngay. Khi Deploy, template cung duoc ghi ro vao `BackupConfig` trong `appsettings.json`.
 - Dashboard tron template voi config da luu khi hien thi, nen Agent dung config cu van cho thay dung bo loai tru thuc te.
 - Test scanner tao cac folder/file he thong tai vi tri long nhieu cap va de config exclude rong; ket qua chi file thuong duoc dua vao backup. Test cung xac nhan template khong tao duplicate khi khac hoa/thuong.
+
+### 19.7 Thu TextBox exclude va quay lai ListBox
+
+- Checkpoint truoc khi doi control: commit `608f13b` - `TRUOC KHI DOI DANH SACH EXCLUDE MOT DONG`.
+- Da thu doi `listBox1`/`listBox2` sang TextBox phan cach bang `;`, sau do user chot quay lai ListBox. Code codec/test TextBox da duoc go bo, logic Them/Xoa/List item tro ve nhu checkpoint.
+- Khong reset `Form1.Designer.cs` ve checkpoint vi user da Save All mot layout moi sau checkpoint. Tat ca Location/Size cua cac control khac duoc giu nguyen theo file Designer moi.
+- Hai ListBox giu dung vi tri/kich thuoc cua hai TextBox vua bo tri:
+  - `listBox1`: `Location=(9,29)`, `Size=(255,123)`.
+  - `listBox2`: `Location=(293,29)`, `Size=(255,123)`.
+- Layout lien quan da giu nguyen: `groupBox4 Location=(82,3), Size=(1181,185)`; `PanelHeader Size=(1847,191)`; cac nut Backup va cac vung dock ben duoi van theo thong so Designer hien tai.
+
+### 19.8 Trang thai control Backup theo card/Dashboard - 2026-08-24
+
+- Them bo tinh trang thai tach rieng `AgentControl/BackupConfigurationUiState.cs`; UI co nam tinh huong ro rang: chua chon card, tao config moi, Agent da co config, dang sua config va dang gui/xoa config.
+- Khi mo Control va chua chon card: tat toan bo control con trong group `Backup`, rieng `btnKetNoi` khong bi can thiep.
+- Chon card chua co config: bat editor, Browse, danh sach exclude, chu ky/gio va `btnDeploy`; ba nut Sua/Xoa/Khoi phuc van tat. Quy tac nay giu dung ca card Offline; luc bam Deploy lop validation cu van thong bao Agent Offline va khong ghi DB.
+- Chon card da co config: editor va Deploy bi khoa. Sua/Xoa chi bat khi Agent Online va khong co phien backup dang chay. Khoi phuc luon bat ke ca Agent Offline/Online va ke ca dang backup, vi doc du lieu da co tren Control.
+- Nut Sua gio hoat dong khi chon card truc tiep hoac chon dong Dashboard. Sau khi nap config thanh cong, editor/Deploy bat, nut Sua/Xoa tat; `SourcePaths` tiep tuc nap checkbox lazy vao `tvRemoteFolders` nhu truoc.
+- Deploy chi bat trong che do tao moi hoac sua. Sau ACK thanh cong, UI quay ve trang thai da dang ky va Deploy khong tu bat lai. Neu timeout/ACK loi, editor van giu du lieu de user thu lai.
+- Xoa config khong con bat Deploy vo dieu kien trong `finally`; thanh cong thi card hien tai chuyen dung sang che do chua co config, that bai thi quay ve trang thai da dang ky.
+- Card va Dashboard dung chung mot ham ap trang thai, tranh viec refresh Online/progress cua Dashboard ghi de nut tren card. Click card se bo selection Dashboard de card dang chon la doi tuong thao tac ro rang.
+- Khong sua `Form1.Designer.cs` trong dot nay; toan bo vi tri/kich thuoc control user vua bo tri duoc giu nguyen.
+- Bo sung 2 test ma tran UI. Debug va Release: 93/93 test pass moi cau hinh, 0 test fail. Smoke AgentControl Debug bang data root/certificate tam khoi dong on dinh; lan smoke dau dung shared key ngan hon 32 ky tu nen bi security validation tu choi dung thiet ke, chay lai voi key hop le dat `STARTED_OK`.
+
+### 19.9 Tu bung SourcePaths va don dau `+` tren cay remote - 2026-08-24
+
+- Khi bam Sua cau hinh tu card hoac `dgvDashboard`, Control khong chi nap checkbox nua ma tu cho drive/node lazy-load theo tung cap cua moi `SourcePaths`, bung cac node cha, tick dung folder backup va `EnsureVisible` folder cau hinh dau tien. Khong full-scan ca o dia va khong nap cac nhanh khong lien quan.
+- Module dieu huong rieng: `AgentControl/Form1.RemoteTreeBackupNavigation.cs`. Moi lan doi card tang `_backupConfigLoadVersion`; luong bung cay cu tu dung khi khong con dung Agent/config dang chon. Moi cap co timeout 15 giay, khong treo UI neu Agent mat ket noi.
+- Agent them `RemoteDirectoryInspector.HasVisibleSubdirectories`: khi liet ke mot thu muc, Agent chi kiem tra toi da den thu muc con hien thi dau tien cua tung child, khong de quy. Folder leaf duoc tra `HasSubDirectories=false`, Control khong gan node gia `Loading...`, nen khong con dau `+` sai.
+- `RemoteFileSystemEntry.HasSubDirectories` la `bool?` trong `AgentShared/RemoteDirectoryContent.cs`, co comment `BO SUNG DUNG CHUNG`. Payload Agent cu khong co field se deserialize thanh `null`; Control van hien node lazy nhu cu, bao dam tuong thich nguoc va khong lam mat chuc nang browse.
+- Drive/folder da mo van duoc render va dong bo ListView nhu luong cu. Khi collapse mot node da co folder con, Control van tra ve node gia de lan sau lazy-load lai; folder leaf khong co node con nen khong co dau `+` de collapse.
+- Version Control va Agent nang dong bo tu `1.9` len `1.10` de may Agent 1.9 duoc nhac auto-update va nhan metadata moi.
+- Goi self-contained win-x64 trong `AgentControl/Updates/AgentServices` da publish lai:
+  - `AgentServices.exe`: SHA-256 `35AA47BB5160949469F66D3FC8DBF9E6A6930F2FFAA42E2EBC89E3F91E363610`.
+  - `AgentUpdater.exe`: SHA-256 `E6AECEB17C5746CED91E5D58725446401281DF477169CA35AF0ABAE8043AC6AD`.
+- Them 3 test: quy tac node gia true/false/null, folder co child/leaf, va JSON tuong thich payload Agent cu. Debug va Release: 96/96 pass moi cau hinh; build Release 0 error, 0 warning. Hash hai EXE duoc copy vao output Control khop source package; smoke Control Release va AgentServices package deu `STARTED_OK`.

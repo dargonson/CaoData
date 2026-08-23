@@ -13,6 +13,9 @@ public class RemoteFileSystemEntry
     public string FullPath { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public bool IsFolder { get; set; }
+    // BO SUNG DUNG CHUNG - CAY THU MUC REMOTE:
+    // null giu tuong thich voi Agent cu; true/false cho Control biet co can hien dau + lazy-load hay khong.
+    public bool? HasSubDirectories { get; set; }
     public long Size { get; set; }
     public DateTime LastWriteTime { get; set; }
     public string Extension { get; set; } = string.Empty;

@@ -19,6 +19,8 @@ namespace AgentControl
             new ConcurrentDictionary<string, TaskCompletionSource<BackupConfigAck>>(StringComparer.OrdinalIgnoreCase);
         private bool _applyingBackupTreeChecks;
         private int _backupConfigLoadVersion;
+        private string _backupEditorAgentId = string.Empty;
+        private bool _backupConfigurationOperationBusy;
         private readonly HashSet<string> _configuredBackupSourcePaths =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -35,6 +37,7 @@ namespace AgentControl
             InitializeBackupConfigurationManagementModule();
 
             AddDefaultBackupExclusions();
+            ApplyBackupConfigurationUiState();
             _ = RunControlBackgroundOperationAsync(
                 BackupRepository.InitializeAsync,
                 "Khởi tạo database Backup");
@@ -43,22 +46,25 @@ namespace AgentControl
         private void BackupAgentSelectionChanged(object? sender, EventArgs e)
         {
             ++_backupConfigLoadVersion;
+            _backupEditorAgentId = string.Empty;
             // Card chi phuc vu chon Agent/cay thu muc. Config chi nap khi bam nut Sua tren Dashboard.
             ClearBackupEditor();
+            dgvDashboard.ClearSelection();
+            ApplyBackupConfigurationUiState();
         }
 
-        private async Task LoadBackupConfigIntoEditorAsync(string agentId, int loadVersion)
+        private async Task<bool> LoadBackupConfigIntoEditorAsync(string agentId, int loadVersion)
         {
             BackupConfiguration? config = await BackupRepository.GetConfigAsync(agentId);
             if (loadVersion != _backupConfigLoadVersion ||
                 !string.Equals(agentId, GetSelectedBackupAgentId(), StringComparison.OrdinalIgnoreCase))
             {
-                return;
+                return false;
             }
 
             if (config == null)
             {
-                return;
+                return false;
             }
 
             textBox1.Text = config.ControlStoragePath;
@@ -79,6 +85,7 @@ namespace AgentControl
                 _configuredBackupSourcePaths.Add(NormalizeBackupPath(path));
             }
             ApplyConfiguredBackupChecks(tvRemoteFolders.Nodes);
+            return true;
         }
 
         private string GetSelectedBackupAgentId()
@@ -242,7 +249,9 @@ namespace AgentControl
             TaskCompletionSource<BackupConfigAck> completion =
                 new TaskCompletionSource<BackupConfigAck>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pendingBackupConfigAcks[agentId] = completion;
-            btnDeploy.Enabled = false;
+            _backupConfigurationOperationBusy = true;
+            ApplyBackupConfigurationUiState();
+            bool deployed = false;
 
             try
             {
@@ -268,6 +277,8 @@ namespace AgentControl
                 // Chi chot DB Control sau khi Agent da ghi appsettings va ACK thanh cong.
                 await BackupRepository.SaveConfigAsync(config);
                 BackupDashboardConfigurationSaved(config);
+                _backupEditorAgentId = string.Empty;
+                deployed = true;
                 MessageBox.Show(ack.Message, "Backup", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
@@ -277,7 +288,12 @@ namespace AgentControl
             finally
             {
                 _pendingBackupConfigAcks.TryRemove(agentId, out _);
-                btnDeploy.Enabled = true;
+                _backupConfigurationOperationBusy = false;
+                if (deployed)
+                {
+                    ClearBackupEditor();
+                }
+                ApplyBackupConfigurationUiState();
             }
         }
 

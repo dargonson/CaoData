@@ -2,8 +2,8 @@ namespace AgentShared
 {
     public static class AppVersion
     {
-        public const string CurrentVersionControl = "1.9";
-        public const string CurrentVersionAgent = "1.9";
+        public const string CurrentVersionControl = "1.10";
+        public const string CurrentVersionAgent = "1.10";
 
         // BO SUNG DUNG CHUNG - DUONG DAN RUNTIME:
         // Khong tiep tuc ghi du lieu vao ten thu muc Intel; van copy marker/log cu mot lan

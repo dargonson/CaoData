@@ -1556,11 +1556,12 @@ namespace AgentService
                                             {
                                                 dirContent.SubFolders.Add(info.FullName);
                                                 dirContent.Folders.Add(new RemoteFileSystemEntry
-                                                {
-                                                    FullPath = info.FullName,
-                                                    Name = info.Name,
-                                                    IsFolder = true,
-                                                    Size = 0,
+                                                 {
+                                                     FullPath = info.FullName,
+                                                     Name = info.Name,
+                                                     IsFolder = true,
+                                                     HasSubDirectories = RemoteDirectoryInspector.HasVisibleSubdirectories(info.FullName),
+                                                     Size = 0,
                                                     LastWriteTime = info.LastWriteTime,
                                                     Extension = string.Empty
                                                 });

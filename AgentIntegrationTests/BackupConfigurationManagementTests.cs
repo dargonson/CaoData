@@ -11,6 +11,101 @@ namespace AgentIntegrationTests;
 public sealed class BackupConfigurationManagementTests
 {
     [Fact]
+    public void ConfigurationUiState_FollowsCardCreateEditAndRecoveryRules()
+    {
+        BackupConfigurationUiState noSelection = BackupConfigurationUiState.Resolve(
+            hasSelectedAgent: false,
+            hasConfiguration: false,
+            isOnline: false,
+            hasActiveSession: false,
+            isEditing: false,
+            isBusy: false);
+        Assert.Equal(default, noSelection);
+
+        BackupConfigurationUiState newOfflineAgent = BackupConfigurationUiState.Resolve(
+            hasSelectedAgent: true,
+            hasConfiguration: false,
+            isOnline: false,
+            hasActiveSession: false,
+            isEditing: false,
+            isBusy: false);
+        Assert.True(newOfflineAgent.EditorEnabled);
+        Assert.True(newOfflineAgent.DeployEnabled);
+        Assert.False(newOfflineAgent.EditEnabled);
+        Assert.False(newOfflineAgent.DeleteEnabled);
+        Assert.False(newOfflineAgent.RecoveryEnabled);
+
+        BackupConfigurationUiState configuredOfflineAgent = BackupConfigurationUiState.Resolve(
+            hasSelectedAgent: true,
+            hasConfiguration: true,
+            isOnline: false,
+            hasActiveSession: false,
+            isEditing: false,
+            isBusy: false);
+        Assert.False(configuredOfflineAgent.EditorEnabled);
+        Assert.False(configuredOfflineAgent.DeployEnabled);
+        Assert.False(configuredOfflineAgent.EditEnabled);
+        Assert.False(configuredOfflineAgent.DeleteEnabled);
+        Assert.True(configuredOfflineAgent.RecoveryEnabled);
+
+        BackupConfigurationUiState configuredOnlineAgent = BackupConfigurationUiState.Resolve(
+            hasSelectedAgent: true,
+            hasConfiguration: true,
+            isOnline: true,
+            hasActiveSession: false,
+            isEditing: false,
+            isBusy: false);
+        Assert.False(configuredOnlineAgent.EditorEnabled);
+        Assert.False(configuredOnlineAgent.DeployEnabled);
+        Assert.True(configuredOnlineAgent.EditEnabled);
+        Assert.True(configuredOnlineAgent.DeleteEnabled);
+        Assert.True(configuredOnlineAgent.RecoveryEnabled);
+
+        BackupConfigurationUiState editing = BackupConfigurationUiState.Resolve(
+            hasSelectedAgent: true,
+            hasConfiguration: true,
+            isOnline: true,
+            hasActiveSession: false,
+            isEditing: true,
+            isBusy: false);
+        Assert.True(editing.EditorEnabled);
+        Assert.True(editing.DeployEnabled);
+        Assert.False(editing.EditEnabled);
+        Assert.False(editing.DeleteEnabled);
+        Assert.True(editing.RecoveryEnabled);
+    }
+
+    [Fact]
+    public void ConfigurationUiState_BlocksChangesDuringBackupOrConfigOperation()
+    {
+        BackupConfigurationUiState activeBackup = BackupConfigurationUiState.Resolve(
+            hasSelectedAgent: true,
+            hasConfiguration: true,
+            isOnline: true,
+            hasActiveSession: true,
+            isEditing: false,
+            isBusy: false);
+        Assert.False(activeBackup.EditorEnabled);
+        Assert.False(activeBackup.DeployEnabled);
+        Assert.False(activeBackup.EditEnabled);
+        Assert.False(activeBackup.DeleteEnabled);
+        Assert.True(activeBackup.RecoveryEnabled);
+
+        BackupConfigurationUiState busy = BackupConfigurationUiState.Resolve(
+            hasSelectedAgent: true,
+            hasConfiguration: true,
+            isOnline: true,
+            hasActiveSession: false,
+            isEditing: true,
+            isBusy: true);
+        Assert.False(busy.EditorEnabled);
+        Assert.False(busy.DeployEnabled);
+        Assert.False(busy.EditEnabled);
+        Assert.False(busy.DeleteEnabled);
+        Assert.False(busy.RecoveryEnabled);
+    }
+
+    [Fact]
     public void DashboardManagement_IsAvailableOnlyForOnlineIdleConfiguredAgent()
     {
         var state = new BackupDashboardAgentState("manage-agent");

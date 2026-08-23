@@ -16,9 +16,69 @@ namespace AgentControl
             btndeleteconfigBK.Click += BackupDeleteConfiguration_Click;
         }
 
+        private BackupDashboardAgentState? GetBackupConfigurationManagementTarget()
+        {
+            BackupDashboardAgentState? dashboardState = GetSelectedBackupDashboardState();
+            if (dashboardState != null)
+            {
+                return dashboardState;
+            }
+
+            string selectedCardAgentId = GetSelectedBackupAgentId();
+            return !string.IsNullOrWhiteSpace(selectedCardAgentId) &&
+                _backupDashboardStates.TryGetValue(selectedCardAgentId, out BackupDashboardAgentState? cardState)
+                    ? cardState
+                    : null;
+        }
+
+        private void ApplyBackupConfigurationUiState()
+        {
+            string selectedCardAgentId = GetSelectedBackupAgentId();
+            bool hasSelectedCard = !string.IsNullOrWhiteSpace(selectedCardAgentId);
+            _backupDashboardStates.TryGetValue(selectedCardAgentId, out BackupDashboardAgentState? cardState);
+
+            bool isEditingSelectedCard = hasSelectedCard &&
+                selectedCardAgentId.Equals(_backupEditorAgentId, StringComparison.OrdinalIgnoreCase);
+            BackupConfigurationUiState cardUiState = BackupConfigurationUiState.Resolve(
+                hasSelectedCard,
+                cardState?.Configuration != null,
+                cardState?.IsOnline == true,
+                cardState?.HasActiveSession == true,
+                isEditingSelectedCard,
+                _backupConfigurationOperationBusy);
+
+            SetBackupEditorControlsEnabled(cardUiState.EditorEnabled);
+            btnDeploy.Enabled = cardUiState.DeployEnabled;
+            btnrecovery.Enabled = cardUiState.RecoveryEnabled;
+
+            BackupDashboardAgentState? managementTarget = GetBackupConfigurationManagementTarget();
+            bool canManageTarget = managementTarget?.CanManageConfiguration == true &&
+                !_backupConfigurationOperationBusy &&
+                !isEditingSelectedCard;
+            btneditconfigBK.Enabled = canManageTarget;
+            btndeleteconfigBK.Enabled = canManageTarget;
+        }
+
+        private void SetBackupEditorControlsEnabled(bool enabled)
+        {
+            foreach (Control control in groupBox4.Controls)
+            {
+                if (ReferenceEquals(control, btnKetNoi) ||
+                    ReferenceEquals(control, btnDeploy) ||
+                    ReferenceEquals(control, btneditconfigBK) ||
+                    ReferenceEquals(control, btndeleteconfigBK) ||
+                    ReferenceEquals(control, btnrecovery))
+                {
+                    continue;
+                }
+
+                control.Enabled = enabled;
+            }
+        }
+
         private async void BackupEditConfiguration_Click(object? sender, EventArgs e)
         {
-            BackupDashboardAgentState? state = GetSelectedBackupDashboardState();
+            BackupDashboardAgentState? state = GetBackupConfigurationManagementTarget();
             if (state?.CanManageConfiguration != true)
             {
                 UpdateBackupConfigurationButtons();
@@ -38,10 +98,15 @@ namespace AgentControl
             int loadVersion = ++_backupConfigLoadVersion;
             try
             {
-                await LoadBackupConfigIntoEditorAsync(state.AgentId, loadVersion);
+                if (!await LoadBackupConfigIntoEditorAsync(state.AgentId, loadVersion))
+                {
+                    ApplyBackupConfigurationUiState();
+                    return;
+                }
+                _backupEditorAgentId = state.AgentId;
                 dgvDashboard.ClearSelection();
-                btneditconfigBK.Enabled = false;
-                btndeleteconfigBK.Enabled = false;
+                ApplyBackupConfigurationUiState();
+                await ExpandConfiguredBackupPathsAsync(state.AgentId, loadVersion);
             }
             catch (Exception ex)
             {
@@ -55,7 +120,7 @@ namespace AgentControl
 
         private async void BackupDeleteConfiguration_Click(object? sender, EventArgs e)
         {
-            BackupDashboardAgentState? state = GetSelectedBackupDashboardState();
+            BackupDashboardAgentState? state = GetBackupConfigurationManagementTarget();
             BackupConfiguration? config = state?.Configuration;
             if (state?.CanManageConfiguration != true || config == null)
             {
@@ -87,10 +152,10 @@ namespace AgentControl
             TaskCompletionSource<BackupConfigAck> completion =
                 new TaskCompletionSource<BackupConfigAck>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pendingBackupDeleteAcks[agentId] = completion;
-            btneditconfigBK.Enabled = false;
-            btndeleteconfigBK.Enabled = false;
-            btnDeploy.Enabled = false;
+            _backupConfigurationOperationBusy = true;
+            ApplyBackupConfigurationUiState();
             string archivePath = string.Empty;
+            bool deleted = false;
 
             try
             {
@@ -144,8 +209,10 @@ namespace AgentControl
                 }
 
                 BackupDashboardConfigurationDeleted(agentId);
+                deleted = true;
                 if (agentId.Equals(GetSelectedBackupAgentId(), StringComparison.OrdinalIgnoreCase))
                 {
+                    _backupEditorAgentId = string.Empty;
                     ClearBackupEditor();
                 }
                 try
@@ -178,8 +245,12 @@ namespace AgentControl
             finally
             {
                 _pendingBackupDeleteAcks.TryRemove(agentId, out _);
-                btnDeploy.Enabled = true;
-                UpdateBackupConfigurationButtons();
+                _backupConfigurationOperationBusy = false;
+                if (!deleted)
+                {
+                    _backupEditorAgentId = string.Empty;
+                }
+                ApplyBackupConfigurationUiState();
             }
         }
 

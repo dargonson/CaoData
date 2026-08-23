@@ -400,10 +400,7 @@ namespace AgentControl
 
         private void UpdateBackupConfigurationButtons()
         {
-            BackupDashboardAgentState? state = GetSelectedBackupDashboardState();
-            bool enabled = state?.CanManageConfiguration == true;
-            btneditconfigBK.Enabled = enabled;
-            btndeleteconfigBK.Enabled = enabled;
+            ApplyBackupConfigurationUiState();
         }
 
         private static string JoinDashboardValues(IEnumerable<string>? values)

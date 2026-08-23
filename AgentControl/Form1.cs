@@ -335,7 +335,10 @@ namespace AgentControl
             }
         }
 
-        private TreeNode CreateRemoteFolderNode(string agentId, string remotePath)
+        private TreeNode CreateRemoteFolderNode(
+            string agentId,
+            string remotePath,
+            bool? hasSubDirectories = null)
         {
             remotePath = NormalizeRemotePath(remotePath);
             int icon = GetRemoteFolderIconIndex(remotePath);
@@ -348,9 +351,15 @@ namespace AgentControl
                 Checked = ShouldCheckConfiguredBackupPath(remotePath)
             };
 
-            node.Nodes.Add(new TreeNode("Loading..."));
+            if (ShouldAddRemoteLoadingPlaceholder(hasSubDirectories))
+            {
+                node.Nodes.Add(new TreeNode("Loading..."));
+            }
             return node;
         }
+
+        internal static bool ShouldAddRemoteLoadingPlaceholder(bool? hasSubDirectories) =>
+            hasSubDirectories != false;
 
         private TreeNode? FindRemoteNode(string agentId, string remotePath)
         {
@@ -559,6 +568,7 @@ namespace AgentControl
         {
             if (!agentId.Equals(selectedAgentId, StringComparison.OrdinalIgnoreCase))
             {
+                NotifyRemoteDirectoryLoaded(agentId, dirContent.CurrentPath, success: false);
                 return;
             }
 
@@ -580,12 +590,14 @@ namespace AgentControl
 
             if (string.IsNullOrWhiteSpace(currentPath))
             {
+                NotifyRemoteDirectoryLoaded(agentId, dirContent.CurrentPath, success: false);
                 return;
             }
 
             TreeNode? targetNode = FindRemoteNode(agentId, currentPath);
             if (targetNode == null)
             {
+                NotifyRemoteDirectoryLoaded(agentId, currentPath, success: false);
                 return;
             }
 
@@ -612,9 +624,13 @@ namespace AgentControl
             targetNode.Nodes.Clear();
             foreach (RemoteFileSystemEntry folder in folderEntries)
             {
-                targetNode.Nodes.Add(CreateRemoteFolderNode(agentId, folder.FullPath));
+                targetNode.Nodes.Add(CreateRemoteFolderNode(
+                    agentId,
+                    folder.FullPath,
+                    folder.HasSubDirectories));
             }
             tvRemoteFolders.EndUpdate();
+            NotifyRemoteDirectoryLoaded(agentId, currentPath, success: true);
 
             _pendingDirectoryRequests.TryRemove(agentId, out _);
 
@@ -863,7 +879,7 @@ namespace AgentControl
 
         private async void Form1_Load(object sender, EventArgs e)
         {
-            
+
             this.Text = "Tool Backup - ver " + ControlCurrentVersion;
             InitDownloadGrid();
             InitUploadGrid();
@@ -1525,288 +1541,290 @@ namespace AgentControl
                 byte[] sizeBuffer = new byte[4];
                 while (_isListening)
                 {
-                        // 1. Đọc 4 bytes đầu lấy kích thước gói
-                        int prefixBytesRead = await TransferFrameProtocol.ReadExactOrEndAsync(stream, sizeBuffer, 0, sizeBuffer.Length);
-                        if (prefixBytesRead == 0) break;
-                        if (prefixBytesRead != sizeBuffer.Length) throw new EndOfStreamException();
+                    // 1. Đọc 4 bytes đầu lấy kích thước gói
+                    int prefixBytesRead = await TransferFrameProtocol.ReadExactOrEndAsync(stream, sizeBuffer, 0, sizeBuffer.Length);
+                    if (prefixBytesRead == 0) break;
+                    if (prefixBytesRead != sizeBuffer.Length) throw new EndOfStreamException();
 
-                        int packetSize = BitConverter.ToInt32(sizeBuffer, 0);
-                        TransferFrameProtocol.ValidateFrameSize(packetSize);
+                    int packetSize = BitConverter.ToInt32(sizeBuffer, 0);
+                    TransferFrameProtocol.ValidateFrameSize(packetSize);
 
-                        byte[] firstByteBuffer = new byte[1];
-                        await TransferFrameProtocol.ReadExactAsync(stream, firstByteBuffer, 0, 1);
+                    byte[] firstByteBuffer = new byte[1];
+                    await TransferFrameProtocol.ReadExactAsync(stream, firstByteBuffer, 0, 1);
 
-                        if (firstByteBuffer[0] == TransferFrameProtocol.BinaryDownloadChunkMarker)
+                    if (firstByteBuffer[0] == TransferFrameProtocol.BinaryDownloadChunkMarker)
+                    {
+                        await HandleBinaryDownloadChunkAsync(
+                            stream,
+                            packetSize,
+                            authenticatedAgentId);
+                        continue;
+                    }
+
+                    // BO SUNG MODULE BACKUP: marker rieng, khong di qua luong download hien co.
+                    if (firstByteBuffer[0] == TransferFrameProtocol.BinaryBackupChunkMarker)
+                    {
+                        await _backupReceiver.HandleFileChunkAsync(
+                            stream,
+                            packetSize,
+                            authenticatedAgentId);
+                        continue;
+                    }
+
+                    byte[] dataBuffer = ArrayPool<byte>.Shared.Rent(packetSize);
+
+                    // 2. Đọc đủ số lượng byte của gói dữ liệu JSON
+                    SocketPacket? packet = null;
+                    try
+                    {
+                        dataBuffer[0] = firstByteBuffer[0];
+                        await TransferFrameProtocol.ReadExactAsync(stream, dataBuffer, 1, packetSize - 1);
+                        packet = JsonSerializer.Deserialize<SocketPacket>(
+                            new ReadOnlySpan<byte>(dataBuffer, 0, packetSize));
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(dataBuffer);
+                    }
+
+                    if (packet != null)
+                    {
+                        if (!string.Equals(packet.AgentID, authenticatedAgentId, StringComparison.OrdinalIgnoreCase))
                         {
-                            await HandleBinaryDownloadChunkAsync(
-                                stream,
-                                packetSize,
-                                authenticatedAgentId);
+                            throw new AuthenticationException("AgentID trong gói tin không khớp danh tính đã xác thực.");
+                        }
+
+                        currentAgentID = authenticatedAgentId;
+
+                        if (await TryHandleBackupPacketAsync(packet, client))
+                        {
                             continue;
                         }
 
-                        // BO SUNG MODULE BACKUP: marker rieng, khong di qua luong download hien co.
-                        if (firstByteBuffer[0] == TransferFrameProtocol.BinaryBackupChunkMarker)
-                        {
-                            await _backupReceiver.HandleFileChunkAsync(
-                                stream,
-                                packetSize,
-                                authenticatedAgentId);
-                            continue;
-                        }
+                        // --- PHÂN LOẠI CÁC LOẠI GÓI TIN ĐỔ VỀ ---
 
-                        byte[] dataBuffer = ArrayPool<byte>.Shared.Rent(packetSize);
+                        if (packet.Type == "BROWSE_DRIVES_RESPONSE")
+                        {
+                            var drives = JsonSerializer.Deserialize<List<string>>(packet.Data);
 
-                        // 2. Đọc đủ số lượng byte của gói dữ liệu JSON
-                        SocketPacket? packet = null;
-                        try
-                        {
-                            dataBuffer[0] = firstByteBuffer[0];
-                            await TransferFrameProtocol.ReadExactAsync(stream, dataBuffer, 1, packetSize - 1);
-                            packet = JsonSerializer.Deserialize<SocketPacket>(
-                                new ReadOnlySpan<byte>(dataBuffer, 0, packetSize));
-                        }
-                        finally
-                        {
-                            ArrayPool<byte>.Shared.Return(dataBuffer);
-                        }
-
-                        if (packet != null)
-                        {
-                            if (!string.Equals(packet.AgentID, authenticatedAgentId, StringComparison.OrdinalIgnoreCase))
+                            if (drives != null)
                             {
-                                throw new AuthenticationException("AgentID trong gói tin không khớp danh tính đã xác thực.");
+                                this.BeginInvoke(new Action(() =>
+                                {
+                                     if (!packet.AgentID.Equals(selectedAgentId, StringComparison.OrdinalIgnoreCase))
+                                     {
+                                         NotifyRemoteDrivesLoaded(packet.AgentID, success: false);
+                                         return;
+                                     }
+
+                                    if (tvRemoteFolders.ImageList == null)
+                                    {
+                                        tvRemoteFolders.ImageList = shellImages;
+                                    }
+
+                                    tvRemoteFolders.Nodes.Clear();
+                                    lvRemoteFiles.Items.Clear();
+
+                                     foreach (var drive in drives)
+                                     {
+                                         tvRemoteFolders.Nodes.Add(CreateRemoteFolderNode(packet.AgentID, drive));
+                                     }
+                                     NotifyRemoteDrivesLoaded(packet.AgentID, success: true);
+                                 }));
                             }
-
-                            currentAgentID = authenticatedAgentId;
-
-                            if (await TryHandleBackupPacketAsync(packet, client))
+                        }
+                        else if (packet.Type == "GET_DIRECTORY_RESPONSE")
+                        {
+                            if (!string.IsNullOrEmpty(packet.Data))
                             {
-                                continue;
-                            }
-
-                            // --- PHÂN LOẠI CÁC LOẠI GÓI TIN ĐỔ VỀ ---
-
-                            if (packet.Type == "BROWSE_DRIVES_RESPONSE")
-                            {
-                                var drives = JsonSerializer.Deserialize<List<string>>(packet.Data);
-
-                                if (drives != null)
+                                var dirContent = JsonSerializer.Deserialize<RemoteDirectoryContent>(packet.Data);
+                                if (dirContent != null)
                                 {
                                     this.BeginInvoke(new Action(() =>
                                     {
-                                        if (!packet.AgentID.Equals(selectedAgentId, StringComparison.OrdinalIgnoreCase))
-                                        {
-                                            return;
-                                        }
-
-                                        if (tvRemoteFolders.ImageList == null)
-                                        {
-                                            tvRemoteFolders.ImageList = shellImages;
-                                        }
-
-                                        tvRemoteFolders.Nodes.Clear();
-                                        lvRemoteFiles.Items.Clear();
-
-                                        foreach (var drive in drives)
-                                        {
-                                            tvRemoteFolders.Nodes.Add(CreateRemoteFolderNode(packet.AgentID, drive));
-                                        }
+                                        RenderRemoteDirectory(packet.AgentID, dirContent);
                                     }));
-                                }
-                            }
-                            else if (packet.Type == "GET_DIRECTORY_RESPONSE")
-                            {
-                                if (!string.IsNullOrEmpty(packet.Data))
-                                {
-                                    var dirContent = JsonSerializer.Deserialize<RemoteDirectoryContent>(packet.Data);
-                                    if (dirContent != null)
-                                    {
-                                        this.BeginInvoke(new Action(() =>
-                                        {
-                                            RenderRemoteDirectory(packet.AgentID, dirContent);
-                                        }));
-                                    }
-                                }
-                            }
-                            else if (packet.Type == "GET_FOLDER_FILES_RESPONSE")
-                            {
-                                if (!string.IsNullOrEmpty(packet.Data))
-                                {
-                                    var response = JsonSerializer.Deserialize<RemoteFolderFilesResponse>(packet.Data);
-                                    if (response != null)
-                                    {
-                                        CompleteRemoteFolderFilesRequest(response);
-                                    }
-                                }
-                            }
-                            else if (packet.Type == "REMOTE_FILE_ACTION_RESPONSE")
-                            {
-                                if (!string.IsNullOrEmpty(packet.Data))
-                                {
-                                    var response = JsonSerializer.Deserialize<RemoteFileActionResponse>(packet.Data);
-                                    if (response != null)
-                                    {
-                                        CompleteRemoteFileActionRequest(response);
-                                    }
-                                }
-                            }
-                            else if (packet.Type == AgentUpdatePacketTypes.UpdateAgentStatus)
-                            {
-                                if (!string.IsNullOrEmpty(packet.Data))
-                                {
-                                    var status = JsonSerializer.Deserialize<AgentUpdateStatus>(packet.Data);
-                                    if (status != null)
-                                    {
-                                        AddAgentUpdateStatus(packet.AgentID, status);
-                                        await SQLiteHelper.SaveLogAsync("Update", $"Agent {packet.AgentID}: {status.Status} - {status.Message}");
-                                    }
-                                }
-                            }
-                            else if (packet.Type == "UPLOAD_STATUS")
-                            {
-                                if (!string.IsNullOrEmpty(packet.Data))
-                                {
-                                    var status = JsonSerializer.Deserialize<UploadStatusPacket>(packet.Data);
-                                    if (status != null)
-                                    {
-                                        ApplyUploadStatus(status);
-                                        if (IsDownloadTerminalStatus(status.Status) &&
-                                            _pendingUploadCompletions.TryRemove(status.UploadID, out var completion))
-                                        {
-                                            completion.TrySetResult(status);
-                                        }
-                                    }
-                                }
-                            }
-                            else if (packet.Type == "REGISTER")
-                            {
-                                var info = System.Text.Json.JsonSerializer.Deserialize<AgentInfo>(packet.Data);
-                                if (info != null)
-                                {
-                                    await SQLiteHelper.SaveOrUpdateAgentAsync(packet.AgentID, info, true);
-                                    // [ĐÃ CÓ SẴN] Lưu hoặc cập nhật thông tin Agent vào danh sách quản lý
-                                    // [ĐÃ CÓ SẴN CỦA FEN] Lưu thông tin kết nối
-                                    if (_connectedAgents.TryGetValue(packet.AgentID, out var oldAgent) && !ReferenceEquals(oldAgent.Client, client))
-                                    {
-                                        oldAgent.Client?.Close();
-                                    }
-                                    _connectedAgents[packet.AgentID] = (client, DateTime.Now);
-
-                                    // 🚀 Tự động quét hàng đợi để Resume khi reconnect (Tách luồng an toàn)
-                                    string registeredAgentId = packet.AgentID;
-                                    _ = RunControlBackgroundOperationAsync(async () =>
-                                    {
-                                        // 1. Quét DB lấy danh sách dở dang
-                                        var pendingDownloads = await SQLiteHelper.GetPendingDownloadsByAgentAsync(registeredAgentId);
-
-                                        foreach (var job in pendingDownloads)
-                                        {
-                                            // 2. Đồng bộ offset DB với file vật lý rồi mới yêu cầu resume.
-                                            long resumeOffset = await ReconcileDownloadOffsetAsync(
-                                                job.DownloadID,
-                                                job.LocalPath,
-                                                job.DownloadedBytes);
-                                            var resumeModel = new DownloadRequestModel
-                                            {
-                                                DownloadID = job.DownloadID,
-                                                RemotePath = job.RemotePath,
-                                                ChecksumAlgorithm = ResolveDownloadChecksumForOffset(
-                                                    job.ChecksumAlgorithm,
-                                                    resumeOffset),
-                                                Offset = resumeOffset
-                                            };
-
-                                            var responsePacket = new SocketPacket
-                                            {
-                                                Type = "REQUEST_DOWNLOAD",
-                                                AgentID = registeredAgentId,
-                                                Data = JsonSerializer.Serialize(resumeModel)
-                                            };
-
-                                            await SendPacketToAgentAsync(registeredAgentId, client, responsePacket);
-                                            await SQLiteHelper.UpdateDownloadProgressAsync(job.DownloadID, resumeOffset, "Downloading");
-                                        }
-                                    }, "Resume download khi Agent reconnect");
-                                    this.BeginInvoke(new Action(async () =>
-                                    {
-                                        await LoadAllAgentsFromDbAsync();
-                                    }));
-                                }
-                            }
-                            else if (packet.Type == "HEARTBEAT")
-                            {
-                                if (_connectedAgents.TryGetValue(packet.AgentID, out var activeAgent) &&
-                                    ReferenceEquals(activeAgent.Client, client) &&
-                                    _connectedAgents.TryUpdate(
-                                        packet.AgentID,
-                                        (client, DateTime.Now),
-                                        activeAgent))
-                                {
-                                    await SQLiteHelper.TouchAgentAsync(packet.AgentID);
-                                }
-                            }
-                            // Giao thức Base64 cũ đã được thay bằng binary frame có kiểm tra offset.
-                            else if (packet.Type == "DOWNLOAD_CHUNK")
-                            {
-                                throw new InvalidDataException("Agent đang dùng giao thức DOWNLOAD_CHUNK cũ; cần cập nhật AgentServices.");
-                            }
-                            else if (packet.Type == "DOWNLOAD_ERROR")
-                            {
-                                if (!string.IsNullOrEmpty(packet.Data))
-                                {
-                                    string errorPacketData = packet.Data;
-                                    string errorAgentId = packet.AgentID;
-                                    _ = RunControlBackgroundOperationAsync(async () =>
-                                    {
-                                        try
-                                        {
-                                            var error = JsonSerializer.Deserialize<DownloadErrorPacket>(errorPacketData);
-                                            if (error == null || string.IsNullOrEmpty(error.DownloadID)) return;
-
-                                            if (error.ResetRequired)
-                                            {
-                                                string localPath = await SQLiteHelper.GetLocalPathByDownloadIdAsync(error.DownloadID);
-                                                if (!string.IsNullOrWhiteSpace(localPath) && File.Exists(localPath))
-                                                {
-                                                    using FileStream file = new FileStream(
-                                                        localPath,
-                                                        FileMode.Open,
-                                                        FileAccess.Write,
-                                                        FileShare.Read);
-                                                    file.SetLength(0);
-                                                    file.Flush(flushToDisk: true);
-                                                }
-
-                                                await SQLiteHelper.SetDownloadProgressExactAsync(
-                                                    error.DownloadID,
-                                                    0,
-                                                    "Waiting Agent");
-                                                string checksum = await SQLiteHelper.GetChecksumAlgorithmByDownloadIdAsync(error.DownloadID);
-                                                await SendDownloadRequestAsync(
-                                                    errorAgentId,
-                                                    error.DownloadID,
-                                                    error.RemotePath,
-                                                    checksum);
-                                                return;
-                                            }
-
-                                            long downloadedBytes = Math.Max(0, error.DownloadedBytes);
-                                            await SQLiteHelper.UpdateDownloadProgressAsync(error.DownloadID, downloadedBytes, error.TotalBytes, "Error");
-                                            await SQLiteHelper.SaveLogAsync("Download Error", $"{error.RemotePath}: {error.ErrorMessage}");
-
-                                            _downloadSpeedTracker.TryRemove(error.DownloadID, out _);
-                                            _downloadLocalPathCache.TryRemove(error.DownloadID, out _);
-                                            _downloadDbUpdateTracker.TryRemove(error.DownloadID, out _);
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            Console.WriteLine($"Lỗi xử lý DOWNLOAD_ERROR: {ex.Message}");
-                                        }
-                                    }, "Xử lý DOWNLOAD_ERROR");
                                 }
                             }
                         }
+                        else if (packet.Type == "GET_FOLDER_FILES_RESPONSE")
+                        {
+                            if (!string.IsNullOrEmpty(packet.Data))
+                            {
+                                var response = JsonSerializer.Deserialize<RemoteFolderFilesResponse>(packet.Data);
+                                if (response != null)
+                                {
+                                    CompleteRemoteFolderFilesRequest(response);
+                                }
+                            }
+                        }
+                        else if (packet.Type == "REMOTE_FILE_ACTION_RESPONSE")
+                        {
+                            if (!string.IsNullOrEmpty(packet.Data))
+                            {
+                                var response = JsonSerializer.Deserialize<RemoteFileActionResponse>(packet.Data);
+                                if (response != null)
+                                {
+                                    CompleteRemoteFileActionRequest(response);
+                                }
+                            }
+                        }
+                        else if (packet.Type == AgentUpdatePacketTypes.UpdateAgentStatus)
+                        {
+                            if (!string.IsNullOrEmpty(packet.Data))
+                            {
+                                var status = JsonSerializer.Deserialize<AgentUpdateStatus>(packet.Data);
+                                if (status != null)
+                                {
+                                    AddAgentUpdateStatus(packet.AgentID, status);
+                                    await SQLiteHelper.SaveLogAsync("Update", $"Agent {packet.AgentID}: {status.Status} - {status.Message}");
+                                }
+                            }
+                        }
+                        else if (packet.Type == "UPLOAD_STATUS")
+                        {
+                            if (!string.IsNullOrEmpty(packet.Data))
+                            {
+                                var status = JsonSerializer.Deserialize<UploadStatusPacket>(packet.Data);
+                                if (status != null)
+                                {
+                                    ApplyUploadStatus(status);
+                                    if (IsDownloadTerminalStatus(status.Status) &&
+                                        _pendingUploadCompletions.TryRemove(status.UploadID, out var completion))
+                                    {
+                                        completion.TrySetResult(status);
+                                    }
+                                }
+                            }
+                        }
+                        else if (packet.Type == "REGISTER")
+                        {
+                            var info = System.Text.Json.JsonSerializer.Deserialize<AgentInfo>(packet.Data);
+                            if (info != null)
+                            {
+                                await SQLiteHelper.SaveOrUpdateAgentAsync(packet.AgentID, info, true);
+                                // [ĐÃ CÓ SẴN] Lưu hoặc cập nhật thông tin Agent vào danh sách quản lý
+                                // [ĐÃ CÓ SẴN CỦA FEN] Lưu thông tin kết nối
+                                if (_connectedAgents.TryGetValue(packet.AgentID, out var oldAgent) && !ReferenceEquals(oldAgent.Client, client))
+                                {
+                                    oldAgent.Client?.Close();
+                                }
+                                _connectedAgents[packet.AgentID] = (client, DateTime.Now);
+
+                                // 🚀 Tự động quét hàng đợi để Resume khi reconnect (Tách luồng an toàn)
+                                string registeredAgentId = packet.AgentID;
+                                _ = RunControlBackgroundOperationAsync(async () =>
+                                {
+                                    // 1. Quét DB lấy danh sách dở dang
+                                    var pendingDownloads = await SQLiteHelper.GetPendingDownloadsByAgentAsync(registeredAgentId);
+
+                                    foreach (var job in pendingDownloads)
+                                    {
+                                        // 2. Đồng bộ offset DB với file vật lý rồi mới yêu cầu resume.
+                                        long resumeOffset = await ReconcileDownloadOffsetAsync(
+                                            job.DownloadID,
+                                            job.LocalPath,
+                                            job.DownloadedBytes);
+                                        var resumeModel = new DownloadRequestModel
+                                        {
+                                            DownloadID = job.DownloadID,
+                                            RemotePath = job.RemotePath,
+                                            ChecksumAlgorithm = ResolveDownloadChecksumForOffset(
+                                                job.ChecksumAlgorithm,
+                                                resumeOffset),
+                                            Offset = resumeOffset
+                                        };
+
+                                        var responsePacket = new SocketPacket
+                                        {
+                                            Type = "REQUEST_DOWNLOAD",
+                                            AgentID = registeredAgentId,
+                                            Data = JsonSerializer.Serialize(resumeModel)
+                                        };
+
+                                        await SendPacketToAgentAsync(registeredAgentId, client, responsePacket);
+                                        await SQLiteHelper.UpdateDownloadProgressAsync(job.DownloadID, resumeOffset, "Downloading");
+                                    }
+                                }, "Resume download khi Agent reconnect");
+                                this.BeginInvoke(new Action(async () =>
+                                {
+                                    await LoadAllAgentsFromDbAsync();
+                                }));
+                            }
+                        }
+                        else if (packet.Type == "HEARTBEAT")
+                        {
+                            if (_connectedAgents.TryGetValue(packet.AgentID, out var activeAgent) &&
+                                ReferenceEquals(activeAgent.Client, client) &&
+                                _connectedAgents.TryUpdate(
+                                    packet.AgentID,
+                                    (client, DateTime.Now),
+                                    activeAgent))
+                            {
+                                await SQLiteHelper.TouchAgentAsync(packet.AgentID);
+                            }
+                        }
+                        // Giao thức Base64 cũ đã được thay bằng binary frame có kiểm tra offset.
+                        else if (packet.Type == "DOWNLOAD_CHUNK")
+                        {
+                            throw new InvalidDataException("Agent đang dùng giao thức DOWNLOAD_CHUNK cũ; cần cập nhật AgentServices.");
+                        }
+                        else if (packet.Type == "DOWNLOAD_ERROR")
+                        {
+                            if (!string.IsNullOrEmpty(packet.Data))
+                            {
+                                string errorPacketData = packet.Data;
+                                string errorAgentId = packet.AgentID;
+                                _ = RunControlBackgroundOperationAsync(async () =>
+                                {
+                                    try
+                                    {
+                                        var error = JsonSerializer.Deserialize<DownloadErrorPacket>(errorPacketData);
+                                        if (error == null || string.IsNullOrEmpty(error.DownloadID)) return;
+
+                                        if (error.ResetRequired)
+                                        {
+                                            string localPath = await SQLiteHelper.GetLocalPathByDownloadIdAsync(error.DownloadID);
+                                            if (!string.IsNullOrWhiteSpace(localPath) && File.Exists(localPath))
+                                            {
+                                                using FileStream file = new FileStream(
+                                                    localPath,
+                                                    FileMode.Open,
+                                                    FileAccess.Write,
+                                                    FileShare.Read);
+                                                file.SetLength(0);
+                                                file.Flush(flushToDisk: true);
+                                            }
+
+                                            await SQLiteHelper.SetDownloadProgressExactAsync(
+                                                error.DownloadID,
+                                                0,
+                                                "Waiting Agent");
+                                            string checksum = await SQLiteHelper.GetChecksumAlgorithmByDownloadIdAsync(error.DownloadID);
+                                            await SendDownloadRequestAsync(
+                                                errorAgentId,
+                                                error.DownloadID,
+                                                error.RemotePath,
+                                                checksum);
+                                            return;
+                                        }
+
+                                        long downloadedBytes = Math.Max(0, error.DownloadedBytes);
+                                        await SQLiteHelper.UpdateDownloadProgressAsync(error.DownloadID, downloadedBytes, error.TotalBytes, "Error");
+                                        await SQLiteHelper.SaveLogAsync("Download Error", $"{error.RemotePath}: {error.ErrorMessage}");
+
+                                        _downloadSpeedTracker.TryRemove(error.DownloadID, out _);
+                                        _downloadLocalPathCache.TryRemove(error.DownloadID, out _);
+                                        _downloadDbUpdateTracker.TryRemove(error.DownloadID, out _);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Console.WriteLine($"Lỗi xử lý DOWNLOAD_ERROR: {ex.Message}");
+                                    }
+                                }, "Xử lý DOWNLOAD_ERROR");
+                            }
+                        }
+                    }
                 }
             }
             catch (Exception ex) when (IsConnectionLostException(ex) || ex is AuthenticationException || ex is InvalidDataException)
@@ -3747,66 +3765,161 @@ namespace AgentControl
         {
             try
             {
-            if (_isUploadRunning)
-            {
-                return;
-            }
-
-            if (HasQueuedUploadPlans())
-            {
-                await UploadQueuedPlansAsync();
-                return;
-            }
-
-            if (!TryGetRemoteNodeTag(tvRemoteFolders.SelectedNode, out RemoteNodeTag? remoteTag) || remoteTag == null)
-            {
-                MessageBox.Show("Vui lòng chọn thư mục đích trên Agent trước khi upload.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            string uploadAgentId = remoteTag.AgentId;
-            if (!_connectedAgents.TryGetValue(uploadAgentId, out var agentInfo) || agentInfo.Client == null || !agentInfo.Client.Connected)
-            {
-                MessageBox.Show("Agent đang offline hoặc chưa kết nối.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            DialogResult uploadMode = MessageBox.Show(
-                "Ban muon upload thu muc?\nYes: Upload thu muc\nNo: Upload file",
-                "Upload",
-                MessageBoxButtons.YesNoCancel,
-                MessageBoxIcon.Question);
-
-            if (uploadMode == DialogResult.Cancel)
-            {
-                return;
-            }
-
-            if (uploadMode == DialogResult.Yes)
-            {
-                string folderChecksumAlgorithm = GetSelectedChecksumAlgorithm();
-                string folderRemoteRoot = NormalizeRemotePath(remoteTag.RemotePath);
-                var folderUploadFiles = new List<UploadFilePlan>();
-                var remoteDirectories = new List<string>();
-                var scanErrors = new List<string>();
-
-                using FolderBrowserDialog fbd = new FolderBrowserDialog
-                {
-                    Description = "Chon thu muc de upload xuong Agent",
-                    UseDescriptionForTitle = true,
-                    ShowNewFolderButton = false
-                };
-
-                if (fbd.ShowDialog() != DialogResult.OK || string.IsNullOrWhiteSpace(fbd.SelectedPath))
+                if (_isUploadRunning)
                 {
                     return;
                 }
 
-                BuildLocalFolderUploadPlan(fbd.SelectedPath, folderRemoteRoot, folderChecksumAlgorithm, folderUploadFiles, remoteDirectories, scanErrors);
-                if (folderUploadFiles.Count == 0 && remoteDirectories.Count == 0)
+                if (HasQueuedUploadPlans())
                 {
-                    MessageBox.Show("Khong co file hoac thu muc nao de upload.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    await UploadQueuedPlansAsync();
                     return;
+                }
+
+                if (!TryGetRemoteNodeTag(tvRemoteFolders.SelectedNode, out RemoteNodeTag? remoteTag) || remoteTag == null)
+                {
+                    MessageBox.Show("Vui lòng chọn thư mục đích trên Agent trước khi upload.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                string uploadAgentId = remoteTag.AgentId;
+                if (!_connectedAgents.TryGetValue(uploadAgentId, out var agentInfo) || agentInfo.Client == null || !agentInfo.Client.Connected)
+                {
+                    MessageBox.Show("Agent đang offline hoặc chưa kết nối.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                DialogResult uploadMode = MessageBox.Show(
+                    "Ban muon upload thu muc?\nYes: Upload thu muc\nNo: Upload file",
+                    "Upload",
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Question);
+
+                if (uploadMode == DialogResult.Cancel)
+                {
+                    return;
+                }
+
+                if (uploadMode == DialogResult.Yes)
+                {
+                    string folderChecksumAlgorithm = GetSelectedChecksumAlgorithm();
+                    string folderRemoteRoot = NormalizeRemotePath(remoteTag.RemotePath);
+                    var folderUploadFiles = new List<UploadFilePlan>();
+                    var remoteDirectories = new List<string>();
+                    var scanErrors = new List<string>();
+
+                    using FolderBrowserDialog fbd = new FolderBrowserDialog
+                    {
+                        Description = "Chon thu muc de upload xuong Agent",
+                        UseDescriptionForTitle = true,
+                        ShowNewFolderButton = false
+                    };
+
+                    if (fbd.ShowDialog() != DialogResult.OK || string.IsNullOrWhiteSpace(fbd.SelectedPath))
+                    {
+                        return;
+                    }
+
+                    BuildLocalFolderUploadPlan(fbd.SelectedPath, folderRemoteRoot, folderChecksumAlgorithm, folderUploadFiles, remoteDirectories, scanErrors);
+                    if (folderUploadFiles.Count == 0 && remoteDirectories.Count == 0)
+                    {
+                        MessageBox.Show("Khong co file hoac thu muc nao de upload.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+
+                    _isUploadRunning = true;
+                    SetTransferListLock(true, uploadMode: true);
+                    btnupload.Enabled = false;
+                    btnCopy.Enabled = false;
+
+                    int folderSuccessCount = 0;
+                    int folderErrorCount = 0;
+                    int createdDirectoryCount = 0;
+                    try
+                    {
+                        foreach (UploadFilePlan file in folderUploadFiles)
+                        {
+                            AddOrUpdateUploadRow(file, 0, "Waiting", "0 B/s");
+                        }
+
+                        foreach (string remoteDirectory in remoteDirectories.Distinct(StringComparer.OrdinalIgnoreCase))
+                        {
+                            try
+                            {
+                                RemoteFileActionResponse? response = await CreateRemoteDirectoryAsync(uploadAgentId, remoteDirectory);
+                                if (response?.Success == true)
+                                {
+                                    createdDirectoryCount++;
+                                }
+                                else
+                                {
+                                    folderErrorCount++;
+                                }
+                            }
+                            catch
+                            {
+                                folderErrorCount++;
+                            }
+                        }
+
+                        foreach (UploadFilePlan file in folderUploadFiles)
+                        {
+                            UploadStatusPacket result = await UploadSingleFileAsync(uploadAgentId, agentInfo.Client, file);
+                            if (result.Status.Equals("Completed", StringComparison.OrdinalIgnoreCase) || IsChecksumMatchedStatus(result.Status))
+                            {
+                                folderSuccessCount++;
+                            }
+                            else
+                            {
+                                folderErrorCount++;
+                            }
+                        }
+
+                        await RequestRemoteDirectoryAsync(remoteTag);
+                        string scanWarning = scanErrors.Count > 0 ? $"\nBo qua khi doc local: {scanErrors.Count}" : string.Empty;
+                        MessageBox.Show(
+                            $"Da hoan tat upload thu muc.\nThu muc da tao: {createdDirectoryCount}\nFile thanh cong: {folderSuccessCount}\nLoi: {folderErrorCount}{scanWarning}",
+                            "Thong bao",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information);
+                    }
+                    finally
+                    {
+                        _isUploadRunning = false;
+                        btnupload.Enabled = true;
+                        btnCopy.Enabled = true;
+                        SetTransferListLock(false, uploadMode: true);
+                    }
+
+                    return;
+                }
+
+                using OpenFileDialog ofd = new OpenFileDialog
+                {
+                    Title = "Chọn file để upload xuống Agent",
+                    Multiselect = true,
+                    CheckFileExists = true
+                };
+
+                if (ofd.ShowDialog() != DialogResult.OK || ofd.FileNames.Length == 0)
+                {
+                    return;
+                }
+
+                string checksumAlgorithm = GetSelectedChecksumAlgorithm();
+                string remoteFolder = NormalizeRemotePath(remoteTag.RemotePath);
+                var uploadFiles = new List<UploadFilePlan>();
+                foreach (string localPath in ofd.FileNames)
+                {
+                    long totalBytes = 0;
+                    try
+                    {
+                        totalBytes = new FileInfo(localPath).Length;
+                    }
+                    catch { }
+
+                    string remotePath = Path.Combine(remoteFolder, Path.GetFileName(localPath));
+                    uploadFiles.Add(new UploadFilePlan(localPath, remotePath, totalBytes, checksumAlgorithm));
                 }
 
                 _isUploadRunning = true;
@@ -3814,54 +3927,32 @@ namespace AgentControl
                 btnupload.Enabled = false;
                 btnCopy.Enabled = false;
 
-                int folderSuccessCount = 0;
-                int folderErrorCount = 0;
-                int createdDirectoryCount = 0;
+                int successCount = 0;
+                int errorCount = 0;
                 try
                 {
-                    foreach (UploadFilePlan file in folderUploadFiles)
+                    foreach (UploadFilePlan file in uploadFiles)
                     {
                         AddOrUpdateUploadRow(file, 0, "Waiting", "0 B/s");
                     }
 
-                    foreach (string remoteDirectory in remoteDirectories.Distinct(StringComparer.OrdinalIgnoreCase))
-                    {
-                        try
-                        {
-                            RemoteFileActionResponse? response = await CreateRemoteDirectoryAsync(uploadAgentId, remoteDirectory);
-                            if (response?.Success == true)
-                            {
-                                createdDirectoryCount++;
-                            }
-                            else
-                            {
-                                folderErrorCount++;
-                            }
-                        }
-                        catch
-                        {
-                            folderErrorCount++;
-                        }
-                    }
-
-                    foreach (UploadFilePlan file in folderUploadFiles)
+                    foreach (UploadFilePlan file in uploadFiles)
                     {
                         UploadStatusPacket result = await UploadSingleFileAsync(uploadAgentId, agentInfo.Client, file);
                         if (result.Status.Equals("Completed", StringComparison.OrdinalIgnoreCase) || IsChecksumMatchedStatus(result.Status))
                         {
-                            folderSuccessCount++;
+                            successCount++;
                         }
                         else
                         {
-                            folderErrorCount++;
+                            errorCount++;
                         }
                     }
 
                     await RequestRemoteDirectoryAsync(remoteTag);
-                    string scanWarning = scanErrors.Count > 0 ? $"\nBo qua khi doc local: {scanErrors.Count}" : string.Empty;
                     MessageBox.Show(
-                        $"Da hoan tat upload thu muc.\nThu muc da tao: {createdDirectoryCount}\nFile thanh cong: {folderSuccessCount}\nLoi: {folderErrorCount}{scanWarning}",
-                        "Thong bao",
+                        $"Đã hoàn tất upload.\nThành công: {successCount}\nLỗi: {errorCount}",
+                        "Thông báo",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Information);
                 }
@@ -3872,79 +3963,6 @@ namespace AgentControl
                     btnCopy.Enabled = true;
                     SetTransferListLock(false, uploadMode: true);
                 }
-
-                return;
-            }
-
-            using OpenFileDialog ofd = new OpenFileDialog
-            {
-                Title = "Chọn file để upload xuống Agent",
-                Multiselect = true,
-                CheckFileExists = true
-            };
-
-            if (ofd.ShowDialog() != DialogResult.OK || ofd.FileNames.Length == 0)
-            {
-                return;
-            }
-
-            string checksumAlgorithm = GetSelectedChecksumAlgorithm();
-            string remoteFolder = NormalizeRemotePath(remoteTag.RemotePath);
-            var uploadFiles = new List<UploadFilePlan>();
-            foreach (string localPath in ofd.FileNames)
-            {
-                long totalBytes = 0;
-                try
-                {
-                    totalBytes = new FileInfo(localPath).Length;
-                }
-                catch { }
-
-                string remotePath = Path.Combine(remoteFolder, Path.GetFileName(localPath));
-                uploadFiles.Add(new UploadFilePlan(localPath, remotePath, totalBytes, checksumAlgorithm));
-            }
-
-            _isUploadRunning = true;
-            SetTransferListLock(true, uploadMode: true);
-            btnupload.Enabled = false;
-            btnCopy.Enabled = false;
-
-            int successCount = 0;
-            int errorCount = 0;
-            try
-            {
-                foreach (UploadFilePlan file in uploadFiles)
-                {
-                    AddOrUpdateUploadRow(file, 0, "Waiting", "0 B/s");
-                }
-
-                foreach (UploadFilePlan file in uploadFiles)
-                {
-                    UploadStatusPacket result = await UploadSingleFileAsync(uploadAgentId, agentInfo.Client, file);
-                    if (result.Status.Equals("Completed", StringComparison.OrdinalIgnoreCase) || IsChecksumMatchedStatus(result.Status))
-                    {
-                        successCount++;
-                    }
-                    else
-                    {
-                        errorCount++;
-                    }
-                }
-
-                await RequestRemoteDirectoryAsync(remoteTag);
-                MessageBox.Show(
-                    $"Đã hoàn tất upload.\nThành công: {successCount}\nLỗi: {errorCount}",
-                    "Thông báo",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
-            }
-            finally
-            {
-                _isUploadRunning = false;
-                btnupload.Enabled = true;
-                btnCopy.Enabled = true;
-                SetTransferListLock(false, uploadMode: true);
-            }
             }
             catch (OperationCanceledException) when (_controlLifetimeCts.IsCancellationRequested)
             {
@@ -3963,184 +3981,184 @@ namespace AgentControl
         {
             try
             {
-            // 1. Kiểm tra xem người dùng đã chọn Agent chưa
-            if (string.IsNullOrEmpty(selectedAgentId))
-            {
-                MessageBox.Show("Vui lòng chọn một Agent trước!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            // Kiểm tra danh sách các file được TÍCH CHỌN ô vuông
-            if (lvRemoteFiles.CheckedItems.Count == 0)
-            {
-                MessageBox.Show("Vui lòng tích chọn ít nhất một file từ danh sách để tải!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            // Lấy đường dẫn thư mục cha hiện tại đang mở trên TreeView
-            if (tvRemoteFolders.SelectedNode == null || tvRemoteFolders.SelectedNode.Tag == null)
-            {
-                MessageBox.Show("Không xác định được thư mục hiện tại của Agent!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            string? currentFolderPath = Convert.ToString(tvRemoteFolders.SelectedNode.Tag);
-            if (string.IsNullOrWhiteSpace(currentFolderPath)) return;
-            bool isRemoteSelection = TryGetRemoteNodeTag(tvRemoteFolders.SelectedNode, out RemoteNodeTag? currentRemoteTag) && currentRemoteTag != null;
-            string copyAgentId = currentRemoteTag != null ? currentRemoteTag.AgentId : selectedAgentId;
-
-            // 2. Thay vì SaveFileDialog (bị bật popup liên tục), ta dùng FolderBrowserDialog để chọn một thư mục lưu chung cho tất cả file
-            using (FolderBrowserDialog fbd = new FolderBrowserDialog())
-            {
-                fbd.Description = "Chọn thư mục trên Server để lưu tất cả các file tải về:";
-                if (fbd.ShowDialog() != DialogResult.OK) return;
-
-                string localTargetFolder = fbd.SelectedPath;
-                var filesToDownload = new List<DownloadFilePlan>();
-                int skippedFolders = 0;
-                var folderErrors = new List<string>();
-
-                foreach (ListViewItem selectedItem in lvRemoteFiles.CheckedItems)
+                // 1. Kiểm tra xem người dùng đã chọn Agent chưa
+                if (string.IsNullOrEmpty(selectedAgentId))
                 {
-                    RemoteFileItemTag remoteItem;
-                    if (selectedItem.Tag is RemoteFileItemTag taggedRemoteItem &&
-                        taggedRemoteItem.AgentId.Equals(copyAgentId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        remoteItem = taggedRemoteItem;
-                    }
-                    else
-                    {
-                        string remoteParent = isRemoteSelection
-                            ? currentRemoteTag!.RemotePath
-                            : currentFolderPath;
-                        string fallbackRemotePath = Path.Combine(remoteParent, selectedItem.Text);
-                        remoteItem = new RemoteFileItemTag(
-                            copyAgentId,
-                            fallbackRemotePath,
-                            IsFolderItem(selectedItem));
-                    }
-
-                    if (remoteItem.IsFolder)
-                    {
-                        RemoteFolderFilesResponse? folderResponse = await RequestRemoteFolderFilesAsync(copyAgentId, remoteItem.FullPath);
-                        if (folderResponse == null)
-                        {
-                            skippedFolders++;
-                            folderErrors.Add(remoteItem.FullPath + ": Agent không phản hồi.");
-                            continue;
-                        }
-
-                        if (folderResponse.Errors.Count > 0)
-                        {
-                            folderErrors.AddRange(folderResponse.Errors);
-                        }
-
-                        string localFolderRoot;
-                        try
-                        {
-                            localFolderRoot = PathSafety.GetSafeChildPath(
-                                localTargetFolder,
-                                GetRemoteDisplayName(remoteItem.FullPath));
-                        }
-                        catch (InvalidDataException ex)
-                        {
-                            skippedFolders++;
-                            folderErrors.Add($"{remoteItem.FullPath}: {ex.Message}");
-                            continue;
-                        }
-                        foreach (RemoteFolderFileEntry folderFile in folderResponse.Files)
-                        {
-                            try
-                            {
-                                string safeLocalPath = PathSafety.GetSafeChildPath(
-                                    localFolderRoot,
-                                    folderFile.RelativePath);
-                                filesToDownload.Add(new DownloadFilePlan(
-                                    folderFile.RemotePath,
-                                    safeLocalPath,
-                                    folderFile.Size));
-                            }
-                            catch (InvalidDataException ex)
-                            {
-                                folderErrors.Add($"{folderFile.RemotePath}: {ex.Message}");
-                            }
-                        }
-                        continue;
-                    }
-
-                    try
-                    {
-                        string safeLocalPath = PathSafety.GetSafeChildPath(
-                            localTargetFolder,
-                            GetRemoteDisplayName(remoteItem.FullPath));
-                        filesToDownload.Add(new DownloadFilePlan(
-                            remoteItem.FullPath,
-                            safeLocalPath,
-                            remoteItem.Size));
-                    }
-                    catch (InvalidDataException ex)
-                    {
-                        folderErrors.Add($"{remoteItem.FullPath}: {ex.Message}");
-                    }
-                }
-
-                if (filesToDownload.Count == 0)
-                {
-                    MessageBox.Show("Không tìm thấy file hợp lệ để tải!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show("Vui lòng chọn một Agent trước!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
 
-                filesToDownload = ResolveDuplicateDownloadPaths(filesToDownload);
-
-                string checksumAlgorithm = GetSelectedChecksumAlgorithm();
-                var batchIds = new HashSet<string>();
-                var queuedJobs = new List<(string DownloadID, DownloadFilePlan File)>();
-                int queuedCount = 0;
-                using (var addProgressDialog = new AddQueueProgressDialog(filesToDownload.Count))
+                // Kiểm tra danh sách các file được TÍCH CHỌN ô vuông
+                if (lvRemoteFiles.CheckedItems.Count == 0)
                 {
-                    addProgressDialog.Show(this);
-                    foreach (var file in filesToDownload)
+                    MessageBox.Show("Vui lòng tích chọn ít nhất một file từ danh sách để tải!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // Lấy đường dẫn thư mục cha hiện tại đang mở trên TreeView
+                if (tvRemoteFolders.SelectedNode == null || tvRemoteFolders.SelectedNode.Tag == null)
+                {
+                    MessageBox.Show("Không xác định được thư mục hiện tại của Agent!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                string? currentFolderPath = Convert.ToString(tvRemoteFolders.SelectedNode.Tag);
+                if (string.IsNullOrWhiteSpace(currentFolderPath)) return;
+                bool isRemoteSelection = TryGetRemoteNodeTag(tvRemoteFolders.SelectedNode, out RemoteNodeTag? currentRemoteTag) && currentRemoteTag != null;
+                string copyAgentId = currentRemoteTag != null ? currentRemoteTag.AgentId : selectedAgentId;
+
+                // 2. Thay vì SaveFileDialog (bị bật popup liên tục), ta dùng FolderBrowserDialog để chọn một thư mục lưu chung cho tất cả file
+                using (FolderBrowserDialog fbd = new FolderBrowserDialog())
+                {
+                    fbd.Description = "Chọn thư mục trên Server để lưu tất cả các file tải về:";
+                    if (fbd.ShowDialog() != DialogResult.OK) return;
+
+                    string localTargetFolder = fbd.SelectedPath;
+                    var filesToDownload = new List<DownloadFilePlan>();
+                    int skippedFolders = 0;
+                    var folderErrors = new List<string>();
+
+                    foreach (ListViewItem selectedItem in lvRemoteFiles.CheckedItems)
                     {
-                        string? localFolder = Path.GetDirectoryName(file.LocalPath);
-                        if (!string.IsNullOrEmpty(localFolder))
+                        RemoteFileItemTag remoteItem;
+                        if (selectedItem.Tag is RemoteFileItemTag taggedRemoteItem &&
+                            taggedRemoteItem.AgentId.Equals(copyAgentId, StringComparison.OrdinalIgnoreCase))
                         {
-                            Directory.CreateDirectory(localFolder);
+                            remoteItem = taggedRemoteItem;
+                        }
+                        else
+                        {
+                            string remoteParent = isRemoteSelection
+                                ? currentRemoteTag!.RemotePath
+                                : currentFolderPath;
+                            string fallbackRemotePath = Path.Combine(remoteParent, selectedItem.Text);
+                            remoteItem = new RemoteFileItemTag(
+                                copyAgentId,
+                                fallbackRemotePath,
+                                IsFolderItem(selectedItem));
                         }
 
-                        string downloadId = await AddDownloadJobToQueueAsync(copyAgentId, file.RemotePath, file.LocalPath, file.TotalBytes, checksumAlgorithm);
-                        batchIds.Add(downloadId);
-                        queuedJobs.Add((downloadId, file));
-                        queuedCount++;
+                        if (remoteItem.IsFolder)
+                        {
+                            RemoteFolderFilesResponse? folderResponse = await RequestRemoteFolderFilesAsync(copyAgentId, remoteItem.FullPath);
+                            if (folderResponse == null)
+                            {
+                                skippedFolders++;
+                                folderErrors.Add(remoteItem.FullPath + ": Agent không phản hồi.");
+                                continue;
+                            }
 
-                        AddOrUpdateQueuedDownloadRow(downloadId, file, checksumAlgorithm);
-                        addProgressDialog.UpdateProgress(queuedCount, filesToDownload.Count);
-                        Application.DoEvents();
-                        await Task.Yield();
+                            if (folderResponse.Errors.Count > 0)
+                            {
+                                folderErrors.AddRange(folderResponse.Errors);
+                            }
+
+                            string localFolderRoot;
+                            try
+                            {
+                                localFolderRoot = PathSafety.GetSafeChildPath(
+                                    localTargetFolder,
+                                    GetRemoteDisplayName(remoteItem.FullPath));
+                            }
+                            catch (InvalidDataException ex)
+                            {
+                                skippedFolders++;
+                                folderErrors.Add($"{remoteItem.FullPath}: {ex.Message}");
+                                continue;
+                            }
+                            foreach (RemoteFolderFileEntry folderFile in folderResponse.Files)
+                            {
+                                try
+                                {
+                                    string safeLocalPath = PathSafety.GetSafeChildPath(
+                                        localFolderRoot,
+                                        folderFile.RelativePath);
+                                    filesToDownload.Add(new DownloadFilePlan(
+                                        folderFile.RemotePath,
+                                        safeLocalPath,
+                                        folderFile.Size));
+                                }
+                                catch (InvalidDataException ex)
+                                {
+                                    folderErrors.Add($"{folderFile.RemotePath}: {ex.Message}");
+                                }
+                            }
+                            continue;
+                        }
+
+                        try
+                        {
+                            string safeLocalPath = PathSafety.GetSafeChildPath(
+                                localTargetFolder,
+                                GetRemoteDisplayName(remoteItem.FullPath));
+                            filesToDownload.Add(new DownloadFilePlan(
+                                remoteItem.FullPath,
+                                safeLocalPath,
+                                remoteItem.Size));
+                        }
+                        catch (InvalidDataException ex)
+                        {
+                            folderErrors.Add($"{remoteItem.FullPath}: {ex.Message}");
+                        }
+                    }
+
+                    if (filesToDownload.Count == 0)
+                    {
+                        MessageBox.Show("Không tìm thấy file hợp lệ để tải!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+
+                    filesToDownload = ResolveDuplicateDownloadPaths(filesToDownload);
+
+                    string checksumAlgorithm = GetSelectedChecksumAlgorithm();
+                    var batchIds = new HashSet<string>();
+                    var queuedJobs = new List<(string DownloadID, DownloadFilePlan File)>();
+                    int queuedCount = 0;
+                    using (var addProgressDialog = new AddQueueProgressDialog(filesToDownload.Count))
+                    {
+                        addProgressDialog.Show(this);
+                        foreach (var file in filesToDownload)
+                        {
+                            string? localFolder = Path.GetDirectoryName(file.LocalPath);
+                            if (!string.IsNullOrEmpty(localFolder))
+                            {
+                                Directory.CreateDirectory(localFolder);
+                            }
+
+                            string downloadId = await AddDownloadJobToQueueAsync(copyAgentId, file.RemotePath, file.LocalPath, file.TotalBytes, checksumAlgorithm);
+                            batchIds.Add(downloadId);
+                            queuedJobs.Add((downloadId, file));
+                            queuedCount++;
+
+                            AddOrUpdateQueuedDownloadRow(downloadId, file, checksumAlgorithm);
+                            addProgressDialog.UpdateProgress(queuedCount, filesToDownload.Count);
+                            Application.DoEvents();
+                            await Task.Yield();
+                        }
+                    }
+
+                    tmrUpdateUI_Tick(this, EventArgs.Empty);
+
+                    _activeDownloadBatchIds = batchIds;
+                    _activeDownloadBatchNotified = false;
+                    SetTransferListLock(true, uploadMode: false);
+
+                    if (skippedFolders > 0)
+                    {
+                        MessageBox.Show($"Đã bỏ qua {skippedFolders} thư mục vì Agent không phản hồi.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+
+                    if (folderErrors.Count > 0)
+                    {
+                        MessageBox.Show($"Có {folderErrors.Count} lỗi khi đang liệt kê thư mục. Các file đọc được vẫn được thêm vào hàng đợi.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+
+                    MessageBox.Show($"Đã thêm thành công {filesToDownload.Count} file vào hàng đợi tải xuống.", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                    foreach (var queuedJob in queuedJobs)
+                    {
+                        await SendDownloadRequestAsync(copyAgentId, queuedJob.DownloadID, queuedJob.File.RemotePath, checksumAlgorithm);
                     }
                 }
-
-                tmrUpdateUI_Tick(this, EventArgs.Empty);
-
-                _activeDownloadBatchIds = batchIds;
-                _activeDownloadBatchNotified = false;
-                SetTransferListLock(true, uploadMode: false);
-
-                if (skippedFolders > 0)
-                {
-                    MessageBox.Show($"Đã bỏ qua {skippedFolders} thư mục vì Agent không phản hồi.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-
-                if (folderErrors.Count > 0)
-                {
-                    MessageBox.Show($"Có {folderErrors.Count} lỗi khi đang liệt kê thư mục. Các file đọc được vẫn được thêm vào hàng đợi.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                }
-
-                MessageBox.Show($"Đã thêm thành công {filesToDownload.Count} file vào hàng đợi tải xuống.", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-                foreach (var queuedJob in queuedJobs)
-                {
-                    await SendDownloadRequestAsync(copyAgentId, queuedJob.DownloadID, queuedJob.File.RemotePath, checksumAlgorithm);
-                }
-            }
             }
             catch (OperationCanceledException) when (_controlLifetimeCts.IsCancellationRequested)
             {
@@ -4444,6 +4462,5 @@ namespace AgentControl
             dvgUploads.Visible = radlistup.Checked;
         }
 
-        
     }
 }
