@@ -343,7 +343,9 @@ namespace AgentControl
             {
                 Tag = new RemoteNodeTag(agentId, remotePath),
                 ImageIndex = icon,
-                SelectedImageIndex = icon
+                SelectedImageIndex = icon,
+                // BO SUNG MODULE BACKUP - SUA CONFIG: giu dau tick khi cay remote nap tung cap.
+                Checked = ShouldCheckConfiguredBackupPath(remotePath)
             };
 
             node.Nodes.Add(new TreeNode("Loading..."));
@@ -3071,6 +3073,8 @@ namespace AgentControl
             {
                 await SQLiteHelper.UpdateAgentOwnerNameAsync(agent.AgentID, ownerName);
                 agent.OwnerName = ownerName;
+                // BO SUNG MODULE BACKUP DASHBOARD: dong bo ten nguoi su dung tren dong config.
+                BackupDashboardOwnerChanged(agent.AgentID, ownerName);
                 if (e.Index >= 0 && e.Index < ListboxAgents.Items.Count)
                 {
                     ListboxAgents.Invalidate(ListboxAgents.GetItemRectangle(e.Index));

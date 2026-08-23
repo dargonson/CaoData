@@ -19,6 +19,8 @@ namespace AgentControl
             new ConcurrentDictionary<string, TaskCompletionSource<BackupConfigAck>>(StringComparer.OrdinalIgnoreCase);
         private bool _applyingBackupTreeChecks;
         private int _backupConfigLoadVersion;
+        private readonly HashSet<string> _configuredBackupSourcePaths =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         private void InitializeBackupModule()
         {
@@ -30,41 +32,19 @@ namespace AgentControl
             btnDeploy.Click += BackupDeploy_Click;
             tvRemoteFolders.AfterCheck += BackupTree_AfterCheck;
             ListboxAgents.SelectedIndexChanged += BackupAgentSelectionChanged;
+            InitializeBackupConfigurationManagementModule();
 
-            AddDefaultBackupPatterns();
+            AddDefaultBackupExclusions();
             _ = RunControlBackgroundOperationAsync(
                 BackupRepository.InitializeAsync,
                 "Khởi tạo database Backup");
         }
 
-        private async void BackupAgentSelectionChanged(object? sender, EventArgs e)
+        private void BackupAgentSelectionChanged(object? sender, EventArgs e)
         {
-            int loadVersion = ++_backupConfigLoadVersion;
-            string agentId = GetSelectedBackupAgentId();
-
-            // Xoa ngay cau hinh cua Agent truoc de UI khong hien/ghi nham trong luc doc DB.
+            ++_backupConfigLoadVersion;
+            // Card chi phuc vu chon Agent/cay thu muc. Config chi nap khi bam nut Sua tren Dashboard.
             ClearBackupEditor();
-            if (string.IsNullOrWhiteSpace(agentId))
-            {
-                return;
-            }
-
-            try
-            {
-                await LoadBackupConfigIntoEditorAsync(agentId, loadVersion);
-            }
-            catch (Exception ex)
-            {
-                if (loadVersion == _backupConfigLoadVersion &&
-                    string.Equals(agentId, GetSelectedBackupAgentId(), StringComparison.OrdinalIgnoreCase))
-                {
-                    MessageBox.Show(
-                        "Không thể nạp cấu hình backup của Agent: " + ex.Message,
-                        "Backup",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Error);
-                }
-            }
         }
 
         private async Task LoadBackupConfigIntoEditorAsync(string agentId, int loadVersion)
@@ -89,8 +69,16 @@ namespace AgentControl
                 dateTimePicker1.Value = DateTime.Today.Add(backupTime);
             }
 
-            ReplaceListItems(listBox1, config.ExcludedFolders);
-            ReplaceListItems(listBox2, config.ExcludedPatterns);
+            ReplaceListItems(listBox1, config.ExcludedFolders ?? Enumerable.Empty<string>());
+            ReplaceListItems(listBox2, config.ExcludedPatterns ?? Enumerable.Empty<string>());
+            AddDefaultBackupExclusions();
+            _configuredBackupSourcePaths.Clear();
+            foreach (string path in (config.SourcePaths ?? new List<string>())
+                .Where(path => !string.IsNullOrWhiteSpace(path)))
+            {
+                _configuredBackupSourcePaths.Add(NormalizeBackupPath(path));
+            }
+            ApplyConfiguredBackupChecks(tvRemoteFolders.Nodes);
         }
 
         private string GetSelectedBackupAgentId()
@@ -156,6 +144,7 @@ namespace AgentControl
         private void BackupDeletePattern_Click(object? sender, EventArgs e)
         {
             RemoveSelectedListItems(listBox2);
+            AddDefaultBackupExclusions();
         }
 
         private void BackupAddExcludedFolder_Click(object? sender, EventArgs e)
@@ -176,6 +165,7 @@ namespace AgentControl
         private void BackupDeleteExcludedFolder_Click(object? sender, EventArgs e)
         {
             RemoveSelectedListItems(listBox1);
+            AddDefaultBackupExclusions();
         }
 
         private async void BackupDeploy_Click(object? sender, EventArgs e)
@@ -190,6 +180,17 @@ namespace AgentControl
                 agentInfo.Client == null || !agentInfo.Client.Connected)
             {
                 MessageBox.Show("Agent đang Offline.", "Backup", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (_backupDashboardStates.TryGetValue(selectedAgentId, out BackupDashboardAgentState? dashboardState) &&
+                dashboardState.HasActiveSession)
+            {
+                MessageBox.Show(
+                    "Agent đang backup, hãy chờ phiên hiện tại hoàn tất rồi mới sửa cấu hình.",
+                    "Backup",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
                 return;
             }
 
@@ -235,6 +236,7 @@ namespace AgentControl
                 ExcludedPatterns = GetListItems(listBox2),
                 UpdatedAtUtc = DateTime.UtcNow
             };
+            BackupExclusionDefaults.EnsureIncluded(config);
 
             string agentId = selectedAgentId;
             TaskCompletionSource<BackupConfigAck> completion =
@@ -285,6 +287,19 @@ namespace AgentControl
             {
                 BackupConfigAck? ack = JsonSerializer.Deserialize<BackupConfigAck>(packet.Data);
                 if (ack != null && _pendingBackupConfigAcks.TryGetValue(packet.AgentID, out TaskCompletionSource<BackupConfigAck>? completion))
+                {
+                    completion.TrySetResult(ack);
+                }
+                return true;
+            }
+
+            if (packet.Type == BackupPacketTypes.ConfigDeleteAck)
+            {
+                BackupConfigAck? ack = JsonSerializer.Deserialize<BackupConfigAck>(packet.Data);
+                if (ack != null &&
+                    _pendingBackupDeleteAcks.TryGetValue(
+                        packet.AgentID,
+                        out TaskCompletionSource<BackupConfigAck>? completion))
                 {
                     completion.TrySetResult(ack);
                 }
@@ -436,6 +451,7 @@ namespace AgentControl
             try
             {
                 SetChildCheckState(e.Node.Nodes, e.Node.Checked);
+                TrackConfiguredBackupSourceSelection(e.Node);
                 SyncVisibleRemoteFileChecksFromTreeNode(e.Node);
             }
             finally
@@ -473,9 +489,10 @@ namespace AgentControl
             dateTimePicker1.Value = DateTime.Today;
             listBox1.Items.Clear();
             listBox2.Items.Clear();
+            _configuredBackupSourcePaths.Clear();
             ClearTreeChecks(tvRemoteFolders.Nodes);
             SyncVisibleRemoteFileChecksFromTreeSelection();
-            AddDefaultBackupPatterns();
+            AddDefaultBackupExclusions();
         }
 
         private void ClearTreeChecks(TreeNodeCollection nodes)
@@ -500,16 +517,64 @@ namespace AgentControl
             }
         }
 
-        private void AddDefaultBackupPatterns()
+        private void ApplyConfiguredBackupChecks(TreeNodeCollection nodes)
         {
-            if (listBox2.Items.Count > 0)
+            _applyingBackupTreeChecks = true;
+            try
+            {
+                ApplyConfiguredBackupChecksCore(nodes);
+            }
+            finally
+            {
+                _applyingBackupTreeChecks = false;
+            }
+        }
+
+        private void TrackConfiguredBackupSourceSelection(TreeNode node)
+        {
+            if (!TryGetRemoteNodeTag(node, out RemoteNodeTag? tag) || tag == null)
             {
                 return;
             }
 
-            foreach (string pattern in new[] { ".tmp", ".temp", "~*", "~$*" })
+            string changedPath = NormalizeBackupPath(tag.RemotePath);
+            _configuredBackupSourcePaths.RemoveWhere(source =>
+                IsSameOrDescendantRemotePath(source, changedPath));
+            if (node.Checked)
             {
-                listBox2.Items.Add(pattern);
+                _configuredBackupSourcePaths.Add(changedPath);
+            }
+        }
+
+        private void ApplyConfiguredBackupChecksCore(TreeNodeCollection nodes)
+        {
+            foreach (TreeNode node in nodes)
+            {
+                if (TryGetRemoteNodeTag(node, out RemoteNodeTag? tag) && tag != null)
+                {
+                    node.Checked = ShouldCheckConfiguredBackupPath(tag.RemotePath);
+                }
+                ApplyConfiguredBackupChecksCore(node.Nodes);
+            }
+        }
+
+        private bool ShouldCheckConfiguredBackupPath(string remotePath)
+        {
+            string candidate = NormalizeBackupPath(remotePath);
+            return _configuredBackupSourcePaths.Any(source =>
+                IsSameOrDescendantRemotePath(candidate, source));
+        }
+
+        private void AddDefaultBackupExclusions()
+        {
+            foreach (string folderName in BackupExclusionDefaults.FolderNames)
+            {
+                AddUniqueListItem(listBox1, folderName);
+            }
+
+            foreach (string pattern in BackupExclusionDefaults.FilePatterns)
+            {
+                AddUniqueListItem(listBox2, pattern);
             }
         }
 

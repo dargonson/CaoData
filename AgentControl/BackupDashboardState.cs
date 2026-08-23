@@ -18,7 +18,7 @@ namespace AgentControl
 
         public string AgentId { get; }
         public string MachineName { get; private set; } = string.Empty;
-        public string UserName { get; private set; } = string.Empty;
+        public string OwnerName { get; private set; } = string.Empty;
         public string OsDisplay { get; private set; } = "Khác";
         public BackupConfiguration? Configuration { get; private set; }
         public bool IsOnline { get; private set; }
@@ -37,6 +37,7 @@ namespace AgentControl
         public double BytesPerSecond { get; private set; }
         public BackupDashboardProgressMode ProgressMode { get; private set; }
         public string StatusText { get; private set; } = string.Empty;
+        public bool CanManageConfiguration => Configuration != null && IsOnline && !HasActiveSession;
         public string ProgressDisplayText => ProgressMode == BackupDashboardProgressMode.Waiting
             ? LastSuccessfulSessionStartedAtUtc.HasValue
                 ? $"HOÀN THÀNH {LastSuccessfulSessionStartedAtUtc.Value.ToLocalTime():yyyy-MM-dd}"
@@ -48,16 +49,37 @@ namespace AgentControl
             AgentId = agentId?.Trim() ?? string.Empty;
         }
 
-        public void UpdateAgent(string machineName, string userName, string osVersion)
+        public void UpdateAgent(string machineName, string ownerName, string osVersion)
         {
             MachineName = machineName?.Trim() ?? string.Empty;
-            UserName = userName?.Trim() ?? string.Empty;
+            OwnerName = ownerName?.Trim() ?? string.Empty;
             OsDisplay = NormalizeOs(osVersion);
         }
 
         public void SetConfiguration(BackupConfiguration? configuration)
         {
             Configuration = configuration;
+            RefreshVisualStatus();
+        }
+
+        public void ResetBackupConfigurationAndHistory()
+        {
+            Configuration = null;
+            HasActiveSession = false;
+            ActiveSessionName = string.Empty;
+            BackupType = string.Empty;
+            StartedAtUtc = null;
+            LastSuccessfulSessionStartedAtUtc = null;
+            PlannedFileCount = 0;
+            ProcessedFileCount = 0;
+            PlannedTotalBytes = 0;
+            ProcessedBytes = 0;
+            TransferredBytes = 0;
+            ProgressPercentage = 0;
+            CurrentFile = string.Empty;
+            BytesPerSecond = 0;
+            _lastSpeedSampleUtc = null;
+            _lastTransferredBytes = 0;
             RefreshVisualStatus();
         }
 

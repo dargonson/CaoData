@@ -215,6 +215,15 @@ public sealed class BackupDashboardTests
         Assert.Equal(expected.ProgressPercentage, actual.ProgressPercentage);
     }
 
+    [Theory]
+    [InlineData(@"C:\Data\Reports\bao-cao.xlsx", "bao-cao.xlsx")]
+    [InlineData(@"D:\Backup\file.bin", "file.bin")]
+    [InlineData("", "")]
+    public void CurrentFileColumn_ShowsOnlyFileName(string fullPath, string expected)
+    {
+        Assert.Equal(expected, frmToolBackup.GetDashboardFileName(fullPath));
+    }
+
     [Fact]
     public async Task DashboardPersistence_LoadsConfigAndUsesSuccessfulSessionStartDate()
     {

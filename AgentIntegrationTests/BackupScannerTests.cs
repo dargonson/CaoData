@@ -64,4 +64,65 @@ public sealed class BackupScannerTests
 
         Assert.Single(result.Files);
     }
+
+    [Fact]
+    public void Scanner_AlwaysExcludesFixedSystemNamesAtAnyLocation()
+    {
+        string root = TestEnvironment.CreateDirectory("scanner-system-template");
+        string nested = Path.Combine(root, "Nested");
+        Directory.CreateDirectory(nested);
+        foreach (string folderName in BackupExclusionDefaults.FolderNames)
+        {
+            string folder = Path.Combine(nested, folderName);
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder, "must-not-backup.dat"), folderName);
+        }
+
+        foreach (string fileName in new[] { "hiberfil.sys", "pagefile.sys", "swapfile.sys" })
+        {
+            File.WriteAllText(Path.Combine(nested, fileName), fileName);
+        }
+        string keepFile = Path.Combine(nested, "keep.dat");
+        File.WriteAllText(keepFile, "keep");
+
+        BackupScanResult result = new BackupFileScanner().Scan(new BackupConfiguration
+        {
+            SourcePaths = new List<string> { root },
+            ExcludedFolders = new List<string>(),
+            ExcludedPatterns = new List<string>()
+        });
+
+        Assert.Empty(result.Errors);
+        Assert.Single(result.Files);
+        Assert.Contains(Path.GetFullPath(keepFile), result.Files.Keys);
+    }
+
+    [Fact]
+    public void FixedTemplate_IsAddedWithoutCaseInsensitiveDuplicates()
+    {
+        var config = new BackupConfiguration
+        {
+            ExcludedFolders = new List<string> { "windows" },
+            ExcludedPatterns = new List<string> { "PAGEFILE.SYS" }
+        };
+
+        BackupExclusionDefaults.EnsureIncluded(config);
+
+        Assert.Equal(
+            1,
+            config.ExcludedFolders.Count(value =>
+                value.Equals("Windows", StringComparison.OrdinalIgnoreCase)));
+        Assert.Equal(
+            1,
+            config.ExcludedPatterns.Count(value =>
+                value.Equals("pagefile.sys", StringComparison.OrdinalIgnoreCase)));
+        Assert.All(
+            BackupExclusionDefaults.FolderNames,
+            value => Assert.Contains(config.ExcludedFolders, item =>
+                item.Equals(value, StringComparison.OrdinalIgnoreCase)));
+        Assert.All(
+            BackupExclusionDefaults.FilePatterns,
+            value => Assert.Contains(config.ExcludedPatterns, item =>
+                item.Equals(value, StringComparison.OrdinalIgnoreCase)));
+    }
 }

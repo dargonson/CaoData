@@ -59,7 +59,6 @@
             panel1 = new Panel();
             panel2 = new Panel();
             PanelHeader = new Panel();
-            pictureBox1 = new PictureBox();
             groupBox4 = new GroupBox();
             btnrecovery = new Button();
             btnDeploy = new Button();
@@ -97,6 +96,9 @@
             dashboardSpeed = new DataGridViewTextBoxColumn();
             dashboardStartedAt = new DataGridViewTextBoxColumn();
             dashboardStatus = new DataGridViewTextBoxColumn();
+            pictureBox1 = new PictureBox();
+            btneditconfigBK = new Button();
+            btndeleteconfigBK = new Button();
             groupBox1.SuspendLayout();
             grbchecksum.SuspendLayout();
             panelZone1.SuspendLayout();
@@ -106,7 +108,6 @@
             panel1.SuspendLayout();
             panel2.SuspendLayout();
             PanelHeader.SuspendLayout();
-            ((System.ComponentModel.ISupportInitialize)pictureBox1).BeginInit();
             groupBox4.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)numericUpDown1).BeginInit();
             ((System.ComponentModel.ISupportInitialize)numericUpDown2).BeginInit();
@@ -114,13 +115,14 @@
             groupBox2.SuspendLayout();
             panel3.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)dgvDashboard).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)pictureBox1).BeginInit();
             SuspendLayout();
             // 
             // groupBox1
             // 
             groupBox1.Controls.Add(radlistdown);
             groupBox1.Controls.Add(radlistup);
-            groupBox1.Location = new Point(29, 82);
+            groupBox1.Location = new Point(29, 91);
             groupBox1.Name = "groupBox1";
             groupBox1.Size = new Size(365, 48);
             groupBox1.TabIndex = 8;
@@ -153,7 +155,7 @@
             // 
             // btnupload
             // 
-            btnupload.Location = new Point(410, 15);
+            btnupload.Location = new Point(410, 24);
             btnupload.Name = "btnupload";
             btnupload.Size = new Size(103, 34);
             btnupload.TabIndex = 7;
@@ -164,7 +166,7 @@
             // 
             lblver.AutoSize = true;
             lblver.Enabled = false;
-            lblver.Location = new Point(1797, 10);
+            lblver.Location = new Point(25, 127);
             lblver.Name = "lblver";
             lblver.Size = new Size(38, 15);
             lblver.TabIndex = 6;
@@ -174,7 +176,7 @@
             // txtxoa
             // 
             txtxoa.Font = new Font("Segoe UI", 15F);
-            txtxoa.Location = new Point(17, 35);
+            txtxoa.Location = new Point(15, 22);
             txtxoa.Name = "txtxoa";
             txtxoa.Size = new Size(139, 34);
             txtxoa.TabIndex = 5;
@@ -185,7 +187,7 @@
             grbchecksum.Controls.Add(radnone);
             grbchecksum.Controls.Add(radmd5);
             grbchecksum.Controls.Add(radsha256);
-            grbchecksum.Location = new Point(29, 26);
+            grbchecksum.Location = new Point(29, 35);
             grbchecksum.Name = "grbchecksum";
             grbchecksum.Size = new Size(258, 52);
             grbchecksum.TabIndex = 4;
@@ -227,7 +229,7 @@
             // 
             // btncleardrv
             // 
-            btncleardrv.Location = new Point(410, 96);
+            btncleardrv.Location = new Point(410, 105);
             btncleardrv.Name = "btncleardrv";
             btncleardrv.Size = new Size(105, 34);
             btncleardrv.TabIndex = 3;
@@ -240,17 +242,17 @@
             btnKetNoi.AllowDrop = true;
             btnKetNoi.Font = new Font("Segoe UI", 20F, FontStyle.Bold);
             btnKetNoi.ForeColor = Color.Red;
-            btnKetNoi.Location = new Point(635, 104);
+            btnKetNoi.Location = new Point(579, 104);
             btnKetNoi.Name = "btnKetNoi";
-            btnKetNoi.Size = new Size(268, 56);
+            btnKetNoi.Size = new Size(417, 56);
             btnKetNoi.TabIndex = 2;
-            btnKetNoi.Text = "Kết nối Agnet";
+            btnKetNoi.Text = "Mở kết nối Control <-> Agent";
             btnKetNoi.UseVisualStyleBackColor = true;
             btnKetNoi.Click += btnKetNoi_Click;
             // 
             // btnCopy
             // 
-            btnCopy.Location = new Point(410, 56);
+            btnCopy.Location = new Point(410, 65);
             btnCopy.Name = "btnCopy";
             btnCopy.Size = new Size(103, 34);
             btnCopy.TabIndex = 1;
@@ -260,11 +262,11 @@
             // 
             // brndel
             // 
-            brndel.Location = new Point(17, 82);
+            brndel.Location = new Point(15, 65);
             brndel.Name = "brndel";
             brndel.Size = new Size(139, 34);
             brndel.TabIndex = 0;
-            brndel.Text = "Xoá";
+            brndel.Text = "Xoá File";
             brndel.UseVisualStyleBackColor = true;
             brndel.Click += brndel_Click;
             // 
@@ -409,19 +411,11 @@
             PanelHeader.Size = new Size(1847, 172);
             PanelHeader.TabIndex = 9;
             // 
-            // pictureBox1
-            // 
-            pictureBox1.Image = Properties.Resources.LOGO;
-            pictureBox1.Location = new Point(12, 5);
-            pictureBox1.Name = "pictureBox1";
-            pictureBox1.Size = new Size(131, 163);
-            pictureBox1.SizeMode = PictureBoxSizeMode.Zoom;
-            pictureBox1.TabIndex = 18;
-            pictureBox1.TabStop = false;
-            // 
             // groupBox4
             // 
+            groupBox4.Controls.Add(btndeleteconfigBK);
             groupBox4.Controls.Add(btnrecovery);
+            groupBox4.Controls.Add(btneditconfigBK);
             groupBox4.Controls.Add(btnDeploy);
             groupBox4.Controls.Add(btnKetNoi);
             groupBox4.Controls.Add(btnDeleteExt);
@@ -442,31 +436,31 @@
             groupBox4.Controls.Add(numericUpDown2);
             groupBox4.Controls.Add(label3);
             groupBox4.Font = new Font("Segoe UI", 9F);
-            groupBox4.Location = new Point(149, 3);
+            groupBox4.Location = new Point(101, 1);
             groupBox4.Name = "groupBox4";
-            groupBox4.Size = new Size(924, 166);
+            groupBox4.Size = new Size(1016, 168);
             groupBox4.TabIndex = 17;
             groupBox4.TabStop = false;
             groupBox4.Text = "Backup";
             // 
             // btnrecovery
             // 
-            btnrecovery.Font = new Font("Segoe UI", 11F, FontStyle.Bold);
+            btnrecovery.Font = new Font("Segoe UI", 10.5F, FontStyle.Bold);
             btnrecovery.ForeColor = Color.Blue;
-            btnrecovery.Location = new Point(772, 45);
+            btnrecovery.Location = new Point(902, 45);
             btnrecovery.Name = "btnrecovery";
-            btnrecovery.Size = new Size(131, 54);
+            btnrecovery.Size = new Size(94, 54);
             btnrecovery.TabIndex = 4;
             btnrecovery.Text = "Khôi phục dữ liệu";
             btnrecovery.UseVisualStyleBackColor = true;
             // 
             // btnDeploy
             // 
-            btnDeploy.Font = new Font("Segoe UI", 11F, FontStyle.Bold);
+            btnDeploy.Font = new Font("Segoe UI", 10.5F, FontStyle.Bold);
             btnDeploy.ForeColor = Color.Green;
-            btnDeploy.Location = new Point(635, 45);
+            btnDeploy.Location = new Point(579, 45);
             btnDeploy.Name = "btnDeploy";
-            btnDeploy.Size = new Size(131, 54);
+            btnDeploy.Size = new Size(102, 54);
             btnDeploy.TabIndex = 4;
             btnDeploy.Text = "Send Config Backup";
             btnDeploy.UseVisualStyleBackColor = true;
@@ -509,7 +503,7 @@
             // 
             // button1
             // 
-            button1.Location = new Point(847, 14);
+            button1.Location = new Point(898, 14);
             button1.Name = "button1";
             button1.Size = new Size(66, 23);
             button1.TabIndex = 3;
@@ -518,9 +512,9 @@
             // 
             // textBox1
             // 
-            textBox1.Location = new Point(462, 15);
+            textBox1.Location = new Point(453, 14);
             textBox1.Name = "textBox1";
-            textBox1.Size = new Size(379, 23);
+            textBox1.Size = new Size(439, 23);
             textBox1.TabIndex = 4;
             // 
             // btndeleteExcFolder
@@ -535,7 +529,7 @@
             // label1
             // 
             label1.AutoSize = true;
-            label1.Location = new Point(390, 22);
+            label1.Location = new Point(381, 22);
             label1.Name = "label1";
             label1.Size = new Size(66, 15);
             label1.TabIndex = 2;
@@ -570,11 +564,11 @@
             // 
             // numericUpDown1
             // 
-            numericUpDown1.Location = new Point(527, 52);
+            numericUpDown1.Location = new Point(518, 47);
             numericUpDown1.Maximum = new decimal(new int[] { 3650, 0, 0, 0 });
             numericUpDown1.Minimum = new decimal(new int[] { 1, 0, 0, 0 });
             numericUpDown1.Name = "numericUpDown1";
-            numericUpDown1.Size = new Size(85, 23);
+            numericUpDown1.Size = new Size(55, 23);
             numericUpDown1.TabIndex = 4;
             numericUpDown1.TextAlign = HorizontalAlignment.Center;
             numericUpDown1.Value = new decimal(new int[] { 60, 0, 0, 0 });
@@ -583,16 +577,16 @@
             // 
             dateTimePicker1.CustomFormat = "HH:mm";
             dateTimePicker1.Format = DateTimePickerFormat.Custom;
-            dateTimePicker1.Location = new Point(527, 87);
+            dateTimePicker1.Location = new Point(519, 76);
             dateTimePicker1.Name = "dateTimePicker1";
             dateTimePicker1.ShowUpDown = true;
-            dateTimePicker1.Size = new Size(84, 23);
+            dateTimePicker1.Size = new Size(54, 23);
             dateTimePicker1.TabIndex = 8;
             // 
             // label2
             // 
             label2.AutoSize = true;
-            label2.Location = new Point(390, 54);
+            label2.Location = new Point(381, 51);
             label2.Name = "label2";
             label2.Size = new Size(131, 15);
             label2.TabIndex = 2;
@@ -601,7 +595,7 @@
             // label4
             // 
             label4.AutoSize = true;
-            label4.Location = new Point(390, 89);
+            label4.Location = new Point(381, 81);
             label4.Name = "label4";
             label4.Size = new Size(98, 15);
             label4.TabIndex = 7;
@@ -609,11 +603,11 @@
             // 
             // numericUpDown2
             // 
-            numericUpDown2.Location = new Point(527, 123);
+            numericUpDown2.Location = new Point(519, 105);
             numericUpDown2.Maximum = new decimal(new int[] { 365, 0, 0, 0 });
             numericUpDown2.Minimum = new decimal(new int[] { 1, 0, 0, 0 });
             numericUpDown2.Name = "numericUpDown2";
-            numericUpDown2.Size = new Size(84, 23);
+            numericUpDown2.Size = new Size(54, 23);
             numericUpDown2.TabIndex = 6;
             numericUpDown2.TextAlign = HorizontalAlignment.Center;
             numericUpDown2.Value = new decimal(new int[] { 1, 0, 0, 0 });
@@ -621,7 +615,7 @@
             // label3
             // 
             label3.AutoSize = true;
-            label3.Location = new Point(390, 126);
+            label3.Location = new Point(381, 109);
             label3.Name = "label3";
             label3.Size = new Size(107, 15);
             label3.TabIndex = 5;
@@ -631,9 +625,9 @@
             // 
             groupBox3.Controls.Add(brndel);
             groupBox3.Controls.Add(txtxoa);
-            groupBox3.Location = new Point(1079, 3);
+            groupBox3.Location = new Point(1128, 3);
             groupBox3.Name = "groupBox3";
-            groupBox3.Size = new Size(169, 135);
+            groupBox3.Size = new Size(169, 159);
             groupBox3.TabIndex = 10;
             groupBox3.TabStop = false;
             groupBox3.Text = "Delete File";
@@ -645,9 +639,9 @@
             groupBox2.Controls.Add(btnupload);
             groupBox2.Controls.Add(btnCopy);
             groupBox2.Controls.Add(grbchecksum);
-            groupBox2.Location = new Point(1254, 3);
+            groupBox2.Location = new Point(1316, 3);
             groupBox2.Name = "groupBox2";
-            groupBox2.Size = new Size(526, 135);
+            groupBox2.Size = new Size(526, 159);
             groupBox2.TabIndex = 9;
             groupBox2.TabStop = false;
             groupBox2.Text = "Download/Upload";
@@ -703,12 +697,12 @@
             // 
             // dashboardStoragePath
             // 
-            dashboardStoragePath.HeaderText = "Đường dẫn lưu file backup";
-            dashboardStoragePath.Name = "dashboardStoragePath";
-            dashboardStoragePath.ReadOnly = true;
             dashboardStoragePath.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
             dashboardStoragePath.FillWeight = 45F;
+            dashboardStoragePath.HeaderText = "Đường dẫn lưu file backup";
             dashboardStoragePath.MinimumWidth = 180;
+            dashboardStoragePath.Name = "dashboardStoragePath";
+            dashboardStoragePath.ReadOnly = true;
             // 
             // dashboardFullBackupDays
             // 
@@ -741,12 +735,12 @@
             // 
             // dashboardCurrentFile
             // 
-            dashboardCurrentFile.HeaderText = "File hiện tại";
-            dashboardCurrentFile.Name = "dashboardCurrentFile";
-            dashboardCurrentFile.ReadOnly = true;
             dashboardCurrentFile.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
             dashboardCurrentFile.FillWeight = 55F;
+            dashboardCurrentFile.HeaderText = "File hiện tại";
             dashboardCurrentFile.MinimumWidth = 220;
+            dashboardCurrentFile.Name = "dashboardCurrentFile";
+            dashboardCurrentFile.ReadOnly = true;
             // 
             // dashboardSpeed
             // 
@@ -768,6 +762,38 @@
             dashboardStatus.Name = "dashboardStatus";
             dashboardStatus.ReadOnly = true;
             dashboardStatus.Width = 190;
+            // 
+            // pictureBox1
+            // 
+            pictureBox1.Image = Properties.Resources.LOGO;
+            pictureBox1.Location = new Point(3, 1);
+            pictureBox1.Name = "pictureBox1";
+            pictureBox1.Size = new Size(94, 108);
+            pictureBox1.SizeMode = PictureBoxSizeMode.Zoom;
+            pictureBox1.TabIndex = 18;
+            pictureBox1.TabStop = false;
+            // 
+            // btneditconfigBK
+            // 
+            btneditconfigBK.Font = new Font("Segoe UI", 10.5F, FontStyle.Bold);
+            btneditconfigBK.ForeColor = Color.FromArgb(192, 64, 0);
+            btneditconfigBK.Location = new Point(687, 45);
+            btneditconfigBK.Name = "btneditconfigBK";
+            btneditconfigBK.Size = new Size(104, 54);
+            btneditconfigBK.TabIndex = 4;
+            btneditconfigBK.Text = "Sửa cấu hình Backup";
+            btneditconfigBK.UseVisualStyleBackColor = true;
+            // 
+            // btndeleteconfigBK
+            // 
+            btndeleteconfigBK.Font = new Font("Segoe UI", 10.5F, FontStyle.Bold);
+            btndeleteconfigBK.ForeColor = Color.Fuchsia;
+            btndeleteconfigBK.Location = new Point(797, 45);
+            btndeleteconfigBK.Name = "btndeleteconfigBK";
+            btndeleteconfigBK.Size = new Size(100, 54);
+            btndeleteconfigBK.TabIndex = 17;
+            btndeleteconfigBK.Text = "Xoá cấu hình Backup";
+            btndeleteconfigBK.UseVisualStyleBackColor = true;
             // 
             // frmToolBackup
             // 
@@ -796,7 +822,6 @@
             panel2.ResumeLayout(false);
             PanelHeader.ResumeLayout(false);
             PanelHeader.PerformLayout();
-            ((System.ComponentModel.ISupportInitialize)pictureBox1).EndInit();
             groupBox4.ResumeLayout(false);
             groupBox4.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)numericUpDown1).EndInit();
@@ -806,6 +831,7 @@
             groupBox2.ResumeLayout(false);
             panel3.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)dgvDashboard).EndInit();
+            ((System.ComponentModel.ISupportInitialize)pictureBox1).EndInit();
             ResumeLayout(false);
             PerformLayout();
         }
@@ -861,7 +887,6 @@
         private ListBox listBox1;
         private Label label5;
         private GroupBox groupBox4;
-        private PictureBox pictureBox1;
         private Button btnDeploy;
         private Button btnrecovery;
         private Panel panel3;
@@ -878,5 +903,8 @@
         private DataGridViewTextBoxColumn dashboardSpeed;
         private DataGridViewTextBoxColumn dashboardStartedAt;
         private DataGridViewTextBoxColumn dashboardStatus;
+        private PictureBox pictureBox1;
+        private Button btneditconfigBK;
+        private Button btndeleteconfigBK;
     }
 }

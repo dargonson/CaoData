@@ -32,7 +32,7 @@ namespace AgentService
             new ConcurrentDictionary<string, TaskCompletionSource<BackupSessionResult>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, TaskCompletionSource<BackupFirstFileResumeInfo>> _pendingFirstResume =
             new ConcurrentDictionary<string, TaskCompletionSource<BackupFirstFileResumeInfo>>(StringComparer.OrdinalIgnoreCase);
-        private readonly string _appSettingsPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        private readonly string _appSettingsPath;
         private readonly string _statePath;
 
         public AgentBackupManager(
@@ -40,7 +40,9 @@ namespace AgentService
             string agentId,
             Func<bool> isConnected,
             Func<SocketPacket, CancellationToken, Task> sendPacket,
-            Func<BackupFileChunkHeader, byte[], int, CancellationToken, Task> sendChunk)
+            Func<BackupFileChunkHeader, byte[], int, CancellationToken, Task> sendChunk,
+            string? appSettingsPath = null,
+            string? statePath = null)
         {
             _logger = logger;
             _agentId = agentId;
@@ -48,11 +50,21 @@ namespace AgentService
             _sendPacket = sendPacket;
             _sendChunk = sendChunk;
 
-            _statePath = AgentDataPaths.GetBackupStatePath(SanitizeFileName(agentId));
+            _appSettingsPath = appSettingsPath ?? Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+            _statePath = statePath ?? AgentDataPaths.GetBackupStatePath(SanitizeFileName(agentId));
         }
 
         public async Task<BackupConfigAck> ApplyConfigurationAsync(string json, CancellationToken token)
         {
+            if (!await _runLock.WaitAsync(0, token))
+            {
+                return new BackupConfigAck
+                {
+                    Success = false,
+                    Message = "Agent đang backup, chưa thể sửa cấu hình."
+                };
+            }
+
             try
             {
                 BackupConfiguration? config = JsonSerializer.Deserialize<BackupConfiguration>(json);
@@ -77,6 +89,78 @@ namespace AgentService
             {
                 _logger.LogError("Không thể lưu cấu hình backup: {Message}", ex.Message);
                 return new BackupConfigAck { Success = false, Message = ex.Message };
+            }
+            finally
+            {
+                _runLock.Release();
+            }
+        }
+
+        public async Task<BackupConfigAck> DeleteConfigurationAsync(string json, CancellationToken token)
+        {
+            if (!await _runLock.WaitAsync(0, token))
+            {
+                return new BackupConfigAck
+                {
+                    Success = false,
+                    Message = "Agent đang backup, chưa thể xoá cấu hình."
+                };
+            }
+
+            byte[]? originalAppSettings = null;
+            bool appSettingsExisted = File.Exists(_appSettingsPath);
+            bool configurationRemoved = false;
+            try
+            {
+                BackupConfigDeleteRequest? request = JsonSerializer.Deserialize<BackupConfigDeleteRequest>(json);
+                if (request == null ||
+                    !request.AgentID.Equals(_agentId, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException("Yêu cầu xoá cấu hình backup không hợp lệ.");
+                }
+
+                if (appSettingsExisted)
+                {
+                    originalAppSettings = await File.ReadAllBytesAsync(_appSettingsPath, token);
+                }
+                await RemoveConfigurationFromAppSettingsAsync(token);
+                configurationRemoved = true;
+                DeleteRuntimeState();
+                _logger.LogInformation("Đã xoá cấu hình và trạng thái runtime backup.");
+                return new BackupConfigAck
+                {
+                    Success = true,
+                    Message = "Agent đã xoá cấu hình backup thành công."
+                };
+            }
+            catch (Exception ex)
+            {
+                if (configurationRemoved)
+                {
+                    try
+                    {
+                        if (appSettingsExisted && originalAppSettings != null)
+                        {
+                            await WriteAppSettingsBytesAsync(originalAppSettings, CancellationToken.None);
+                        }
+                        else if (File.Exists(_appSettingsPath))
+                        {
+                            File.Delete(_appSettingsPath);
+                        }
+                    }
+                    catch (Exception rollbackError)
+                    {
+                        _logger.LogCritical(
+                            "Không thể phục hồi appsettings sau lỗi xoá state backup: {Message}",
+                            rollbackError.Message);
+                    }
+                }
+                _logger.LogError("Không thể xoá cấu hình backup: {Message}", ex.Message);
+                return new BackupConfigAck { Success = false, Message = ex.Message };
+            }
+            finally
+            {
+                _runLock.Release();
             }
         }
 
@@ -772,26 +856,81 @@ namespace AgentService
                 }
 
                 root["BackupConfig"] = JsonSerializer.SerializeToNode(config);
-                string tempPath = _appSettingsPath + ".backup.tmp";
-                byte[] payload = System.Text.Encoding.UTF8.GetBytes(
-                    root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-                await using (FileStream destination = new FileStream(
-                    tempPath,
-                    FileMode.Create,
-                    FileAccess.Write,
-                    FileShare.None,
-                    64 * 1024,
-                    FileOptions.Asynchronous | FileOptions.WriteThrough))
-                {
-                    await destination.WriteAsync(payload, token);
-                    await destination.FlushAsync(token);
-                    destination.Flush(flushToDisk: true);
-                }
-                File.Move(tempPath, _appSettingsPath, overwrite: true);
+                await WriteAppSettingsRootAsync(root, token);
             }
             finally
             {
                 _configLock.Release();
+            }
+        }
+
+        private async Task RemoveConfigurationFromAppSettingsAsync(CancellationToken token)
+        {
+            await _configLock.WaitAsync(token);
+            try
+            {
+                JsonObject root;
+                if (File.Exists(_appSettingsPath))
+                {
+                    string json = await File.ReadAllTextAsync(_appSettingsPath, token);
+                    root = JsonNode.Parse(json)?.AsObject() ?? new JsonObject();
+                }
+                else
+                {
+                    root = new JsonObject();
+                }
+
+                root.Remove("BackupConfig");
+                await WriteAppSettingsRootAsync(root, token);
+            }
+            finally
+            {
+                _configLock.Release();
+            }
+        }
+
+        private async Task WriteAppSettingsRootAsync(JsonObject root, CancellationToken token)
+        {
+            string? folder = Path.GetDirectoryName(_appSettingsPath);
+            if (!string.IsNullOrWhiteSpace(folder))
+            {
+                Directory.CreateDirectory(folder);
+            }
+
+            byte[] payload = System.Text.Encoding.UTF8.GetBytes(
+                root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            await WriteAppSettingsBytesAsync(payload, token);
+        }
+
+        private async Task WriteAppSettingsBytesAsync(byte[] payload, CancellationToken token)
+        {
+            string tempPath = _appSettingsPath + ".backup.tmp";
+            await using (FileStream destination = new FileStream(
+                tempPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                64 * 1024,
+                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await destination.WriteAsync(payload, token);
+                await destination.FlushAsync(token);
+                destination.Flush(flushToDisk: true);
+            }
+            File.Move(tempPath, _appSettingsPath, overwrite: true);
+        }
+
+        private void DeleteRuntimeState()
+        {
+            if (File.Exists(_statePath))
+            {
+                File.Delete(_statePath);
+            }
+
+            string tempPath = _statePath + ".tmp";
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
             }
         }
 
@@ -924,8 +1063,7 @@ namespace AgentService
                 throw new InvalidDataException("Giờ backup không hợp lệ.");
             }
 
-            config.ExcludedFolders ??= new List<string>();
-            config.ExcludedPatterns ??= new List<string>();
+            BackupExclusionDefaults.EnsureIncluded(config);
         }
 
         private static BackupManifestEntry ToManifestEntry(BackupFileSnapshot snapshot)

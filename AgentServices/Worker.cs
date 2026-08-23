@@ -1275,6 +1275,18 @@ namespace AgentService
                             continue;
                         }
 
+                        if (packet.Type == BackupPacketTypes.ConfigDelete)
+                        {
+                            BackupConfigAck ack = await _backupManager.DeleteConfigurationAsync(packet.Data, token);
+                            await SendPacketAsync(new SocketPacket
+                            {
+                                Type = BackupPacketTypes.ConfigDeleteAck,
+                                AgentID = packet.AgentID,
+                                Data = JsonSerializer.Serialize(ack)
+                            });
+                            continue;
+                        }
+
                         if (packet.Type == BackupPacketTypes.SessionReady ||
                             packet.Type == BackupPacketTypes.SessionResult ||
                             packet.Type == BackupPacketTypes.FirstFileResumeInfo)

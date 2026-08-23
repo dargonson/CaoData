@@ -330,6 +330,40 @@ LIMIT @BatchSize;", "f");
             }
         }
 
+        /// <summary>
+        /// BO SUNG MODULE BACKUP - XOA CAU HINH:
+        /// Xoa index khoi phuc co the tao lai tu manifest; khong xoa file backup vat ly.
+        /// </summary>
+        public async Task DeleteAgentSnapshotsAsync(string agentId)
+        {
+            await InitializeAsync();
+            await _dbLock.WaitAsync();
+            try
+            {
+                using SQLiteConnection connection = OpenConnection();
+                using SQLiteTransaction transaction = connection.BeginTransaction();
+                foreach (string table in new[]
+                {
+                    "RecoverySnapshotFiles",
+                    "RecoverySnapshotDirectories",
+                    "RecoverySnapshots"
+                })
+                {
+                    using SQLiteCommand command = new SQLiteCommand(
+                        $"DELETE FROM {table} WHERE AgentID = @AgentID;",
+                        connection,
+                        transaction);
+                    command.Parameters.AddWithValue("@AgentID", agentId);
+                    command.ExecuteNonQuery();
+                }
+                transaction.Commit();
+            }
+            finally
+            {
+                _dbLock.Release();
+            }
+        }
+
         private SQLiteConnection OpenConnection()
         {
             SQLiteConnection connection = new SQLiteConnection(_connectionString);

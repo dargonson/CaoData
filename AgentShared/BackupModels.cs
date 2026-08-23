@@ -11,6 +11,8 @@ namespace AgentShared
     {
         public const string ConfigDeploy = "BACKUP_CONFIG_DEPLOY";
         public const string ConfigAck = "BACKUP_CONFIG_ACK";
+        public const string ConfigDelete = "BACKUP_CONFIG_DELETE";
+        public const string ConfigDeleteAck = "BACKUP_CONFIG_DELETE_ACK";
         public const string SessionBegin = "BACKUP_SESSION_BEGIN";
         public const string SessionReady = "BACKUP_SESSION_READY";
         public const string SessionComplete = "BACKUP_SESSION_COMPLETE";
@@ -39,6 +41,12 @@ namespace AgentShared
     {
         public bool Success { get; set; }
         public string Message { get; set; } = string.Empty;
+    }
+
+    public sealed class BackupConfigDeleteRequest
+    {
+        public string AgentID { get; set; } = string.Empty;
+        public DateTime RequestedAtUtc { get; set; } = DateTime.UtcNow;
     }
 
     public sealed class BackupSessionBegin

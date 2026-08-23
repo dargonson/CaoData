@@ -697,3 +697,71 @@ git status --short --branch
   - `AgentUpdater.exe`: SHA-256 `1AB8CEFC541D8CF7F5F4E69C0FF5A976E4BEC8923264920E2DA525C8B7853F35`.
 - Test doc lap them `BackupDashboardTests`: FIRST/INC state, resume offset, file/plan 0 byte, mat ket noi/reconnect, reset speed, packet sai Agent/session, so am, session retry cu, ngay khoi tao/hoan tat tre, config DB va so lieu cuc lon khong overflow.
 - Ket qua cuoi: build Debug/Release 0 error, 0 warning; test Debug 80/80, Release 80/80; lap Debug 3 lan 240/240; smoke AgentControl va AgentServices self-contained OK; package source/Debug/Release cung hash; khong co NuGet vulnerable/deprecated theo source hien tai.
+
+## 19. Quan ly cau hinh Backup tu Dashboard - 2026-08-23
+
+### 19.1 Dashboard va cach chon Agent
+
+- Muc 16 ve tu dong nap config khi click card da duoc thay the: click `ListboxAgents` bay gio chi chon Agent va nap cay remote, dong thoi xoa editor ve mac dinh; khong tu nap config backup cu.
+- `dgvDashboard` chi hien cac Agent dang co dong `BackupConfigs`. Agent chua tung cau hinh hoac vua xoa cau hinh khong con dong Dashboard, nhung card Agent van duoc giu nguyen.
+- Dashboard nap config tu DB doc lap voi thao tac click card va co them bon cot: `Online Status`, `Thu muc backup tren Agent`, `Thu muc loai tru`, `Extension / pattern loai tru`.
+- Cot `Thu muc backup tren Agent` lay `BackupConfiguration.SourcePaths` va noi cac duong dan bang dau `;`, vi du `C:\; D:\; E:\123`. Day cung la danh sach duoc nap lai thanh checkbox tren `tvRemoteFolders` khi bam `btneditconfigBK`.
+- Cot `Agent` doi thanh `Ten may tinh`; cot `AgentName` doi thanh `Nguoi su dung` va lay `OwnerName` dang sua duoc tren card, khong lay Windows `Username`. Khi sua OwnerName tren card, Dashboard dong bo ngay.
+- `Online Status` lay tu socket hien tai trong `_connectedAgents`, khong tin trang thai DB cu. Online mau xanh, Offline mau do.
+- Mau dong dang chon la xanh nhat pha 30% tren nen trang (`RGB 178,217,245`) voi chu toi de de doc. Dashboard cho scroll ca ngang/doc vi co them cot.
+- Hai cot `Duong dan luu file backup` va `File hien tai` khong con `Fill`/minimum width co dinh; user co the keo thu gon tuy y. Tooltip van hien du lieu day du.
+- Cot `File hien tai` chi hien ten file trong cell (vi du `bao-cao.xlsx`), con tooltip lay full path truc tiep tu Dashboard state.
+- `btneditconfigBK` va `btndeleteconfigBK` mac dinh Disable; chi Enable khi chon dung mot dong co config, Agent dang Online va khong co phien backup dang chay.
+
+### 19.2 Sua cau hinh
+
+- Bam `btneditconfigBK` se chon dung card Agent, sau do nap path luu tren Control, chu ky INC/Full, gio chay, exclude folder/pattern va `SourcePaths` vao editor Backup.
+- Doi card bang tay khong nap config. Sau khi bam Sua va nap xong, selection Dashboard duoc bo va hai nut quan ly quay lai Disable, tranh thao tac nham Agent.
+- Cac `SourcePaths` duoc giu trong state editor; node remote duoc nap lazy den dau se tick dung den do. Thao tac tick/bo tick cua user cap nhat state nay de node nap sau khong bi tick lai theo config cu.
+- Deploy van theo quy tac cu: gui Agent, doi ACK, chi sau ACK thanh cong moi save `BackupConfigs` tren Control va refresh Dashboard.
+- Control va Agent deu chan Apply config khi backup dang chay. Neu scheduler bat dau dung luc user bam Deploy, `_runLock` tren Agent la lop bao ve cuoi cung va tra ACK that bai thay vi thay config giua phien.
+- Doi scope D/E thanh G giu dung hanh vi da chot: INC sau xem G la Created, D/E la Deleted ve mat logical; backup vat ly cu van con; Recovery truoc ngay doi van thay D/E, sau ngay doi chi thay G.
+
+### 19.3 Xoa cau hinh va archive
+
+- Nut `btndeleteconfigBK` chi xoa mien Backup, tuyet doi khong xoa card Agent va khong xoa dong Agent trong `AgentManagement.db`.
+- Xoa bi khoa neu Agent Offline hoac dang backup. Neu backup bat dau trong khoang race, Agent tu choi lenh bang `_runLock`; Control giu nguyen DB/Dashboard.
+- Truoc khi gui lenh xoa, Control streaming toan bo du lieu backup co tham quyen cua Agent ra file:
+  - `{ControlStoragePath}\BACKUP-ARCHIVE-{AgentID}-{yyyyMMdd-HHmmss}.json`
+  - neu trung ten trong cung giay thi them suffix `-001`, `-002`, ...
+  - ghi vao `.tmp`, flush den dia, dong file, sau do move atomically sang `.json`.
+- JSON co metadata Agent va toan bo dong cua Agent trong cac bang `BackupConfigs`, `BackupSessions`, `BackupFileInventory`, `FirstBackupRuns`, `FirstBackupFiles`, `FirstBackupSkipped`. Reader SQLite va `Utf8JsonWriter` chay streaming, khong nap inventory lon vao RAM.
+- `RecoverySnapshot.db` chi la cache co the tao lai tu manifest nen khong dua vao archive (`DerivedRecoveryCacheIncluded=false` trong JSON); cache cua Agent duoc xoa sau khi Control purge DB.
+- Moi folder/file `FIRST-*`, `INC-*`, Synthetic Full, manifest va payload vat ly duoc giu nguyen. File archive nam cung root voi cac folder nay.
+- Protocol moi trong `AgentShared/BackupModels.cs`: `BACKUP_CONFIG_DELETE`, `BACKUP_CONFIG_DELETE_ACK`, `BackupConfigDeleteRequest`. ACK xoa tach rieng ACK deploy de khong bat nham response.
+- Agent nhan lenh se xoa rieng node `BackupConfig` trong `appsettings.json`, giu nguyen ServerIP/port/key va cac cau hinh khac; sau do xoa backup runtime state va `.tmp`. Lan Deploy sau se khoi dong lai bang FIRST.
+- Agent chi ACK thanh cong sau khi ca appsettings va runtime state da xoa. Neu xoa state loi, Agent thu rollback appsettings va tra ACK that bai.
+- Control chi purge DB sau ACK thanh cong. Purge chay mot transaction cho sau bang backup o tren, chi theo dung `AgentID`; Agent khac khong bi anh huong. Neu mat ket noi/timeout/ACK fail thi DB va Dashboard Control van con, file archive da tao van duoc giu.
+- Sau purge, state Dashboard cung xoa config, ngay backup cu, progress va session cu de cung process hien tai that su tro ve trang thai `CHUA BACKUP`; khong can restart Control.
+
+### 19.4 Tach module va file thay doi
+
+- UI/luong sua-xoa tach tai `AgentControl/Form1.BackupConfigManagement.cs`.
+- Streaming archive/purge tach tai `AgentControl/BackupConfigurationArchiveService.cs`.
+- Dashboard state/UI tiep tuc tach tai `BackupDashboardState.cs` va `Form1.BackupDashboard.cs`.
+- Cac diem bat buoc dung chung trong `Form1.cs`, `Worker.cs`, `AgentBackupManager.cs`, `BackupModels.cs` deu co comment `BO SUNG MODULE BACKUP` o khoi chen moi.
+- `AgentControl.csproj` nest them partial `Form1.BackupConfigManagement.cs` va van giu `EmbeddedResource Remove="Form1.*.resx"`, tranh tai phat loi hai resource `AgentControl.frmToolBackup.resources`.
+
+### 19.5 Test da chay
+
+- Them `BackupConfigurationManagementTests.cs`: dieu kien enable sua/xoa; OwnerName; reset Dashboard ve chua backup; packet delete round-trip; Agent xoa node BackupConfig nhung giu setting khac; Agent tu choi AgentID sai; archive co config/session/inventory/FIRST; purge chi dung Agent; file backup vat ly con nguyen.
+- Debug build: 0 error, 0 warning. Debug integration test: 91/91 pass.
+- Release build sau restore target `win-x64`: 0 error, 0 warning. Release integration test: 91/91 pass.
+- Smoke AgentControl Debug voi data root tam: process khoi dong va song on dinh qua giai doan Form Load/tao Dashboard, khong co exception runtime.
+- Van can nghiem thu UI/socket tren hai may that: click dong Online/Offline, Sua -> tick lazy tree -> Deploy, Xoa -> kiem tra JSON/appsettings/Dashboard, va thu xoa dung luc FIRST/INC dang chay.
+
+### 19.6 Template loai tru he thong bat buoc
+
+- Template dung chung nam tai `AgentShared/BackupExclusionDefaults.cs`; Control va Agent khong giu hai danh sach rieng de tranh lech phien ban.
+- Folder bi loai tru theo ten o moi vi tri, khong phan biet hoa/thuong: `$Recycle.Bin`, `Program Files`, `Program Files (x86)`, `Recovery`, `System Volume Information`, `Windows`.
+- File bi loai tru theo ten o moi vi tri, khong phan biet hoa/thuong: `hiberfil.sys`, `pagefile.sys`, `swapfile.sys`.
+- Cac pattern mac dinh cu van giu: `.tmp`, `.temp`, `~*`, `~$*`.
+- Scanner Agent luon tron template vao bo loc luc quet, ke ca config cu/bi sua thieu danh sach nay. Day la lop bao ve bat buoc, khong phu thuoc UI.
+- UI Control luon hien template trong hai ListBox exclude. Neu user chon xoa mot muc bat buoc, muc do duoc them lai ngay. Khi Deploy, template cung duoc ghi ro vao `BackupConfig` trong `appsettings.json`.
+- Dashboard tron template voi config da luu khi hien thi, nen Agent dung config cu van cho thay dung bo loai tru thuc te.
+- Test scanner tao cac folder/file he thong tai vi tri long nhieu cap va de config exclude rong; ket qua chi file thuong duoc dua vao backup. Test cung xac nhan template khong tao duplicate khi khac hoa/thuong.

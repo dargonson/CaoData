@@ -21,7 +21,7 @@
   <ItemGroup>
     <!-- Cac file partial nay la module cua Form1 va duoc nest duoi form chinh.
          Neu Designer sinh Form1.*.resx rong, khong embed vi no trung resource frmToolBackup. -->
-    <Compile Update="Form1.Backup.cs;Form1.BackupDashboard.cs;Form1.Lifetime.cs;Form1.Recovery.cs;Form1.Tray.cs">
+    <Compile Update="Form1.Backup.cs;Form1.BackupConfigManagement.cs;Form1.BackupDashboard.cs;Form1.Lifetime.cs;Form1.Recovery.cs;Form1.Tray.cs">
       <DependentUpon>Form1.cs</DependentUpon>
     </Compile>
     <EmbeddedResource Remove="Form1.*.resx" />

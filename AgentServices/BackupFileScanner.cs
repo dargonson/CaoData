@@ -13,12 +13,19 @@ namespace AgentService
         {
             BackupScanResult result = new BackupScanResult();
             HashSet<string> visitedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            List<string> excludedFolders = config.ExcludedFolders
+            List<string> excludedFolders = BackupExclusionDefaults.FolderNames
+                .Concat(config.ExcludedFolders ?? Enumerable.Empty<string>())
                 .Where(value => !string.IsNullOrWhiteSpace(value))
                 .Select(value => IsSimpleFolderName(value) ? value.Trim() : NormalizePath(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            List<string> excludedPatterns = BackupExclusionDefaults.FilePatterns
+                .Concat(config.ExcludedPatterns ?? Enumerable.Empty<string>())
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            foreach (string sourceValue in config.SourcePaths)
+            foreach (string sourceValue in config.SourcePaths ?? Enumerable.Empty<string>())
             {
                 string source = NormalizePath(sourceValue);
                 if (string.IsNullOrWhiteSpace(source))
@@ -36,7 +43,7 @@ namespace AgentService
                 {
                     if (File.Exists(source))
                     {
-                        AddFile(source, config.ExcludedPatterns, visitedFiles, result);
+                        AddFile(source, excludedPatterns, visitedFiles, result);
                     }
                     else if (Directory.Exists(source))
                     {
@@ -45,7 +52,7 @@ namespace AgentService
                             result.AddError($"Bỏ qua nguồn là junction/symbolic link: {source}");
                             continue;
                         }
-                        ScanDirectory(source, excludedFolders, config.ExcludedPatterns, visitedFiles, result);
+                        ScanDirectory(source, excludedFolders, excludedPatterns, visitedFiles, result);
                     }
                     else
                     {
