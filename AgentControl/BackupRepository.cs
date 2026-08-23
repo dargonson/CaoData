@@ -128,6 +128,87 @@ ON CONFLICT(AgentID) DO UPDATE SET
             }
         }
 
+        public static async Task<Dictionary<string, BackupConfiguration>> GetAllConfigsAsync()
+        {
+            await InitializeAsync();
+            await DbLock.WaitAsync();
+            try
+            {
+                using SQLiteConnection connection = await OpenConnectionAsync();
+                using SQLiteCommand command = new SQLiteCommand(
+                    "SELECT AgentID, ConfigJson FROM BackupConfigs;",
+                    connection);
+                var result = new Dictionary<string, BackupConfiguration>(StringComparer.OrdinalIgnoreCase);
+                using SQLiteDataReader reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    string agentId = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+                    string json = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+                    if (string.IsNullOrWhiteSpace(agentId) || string.IsNullOrWhiteSpace(json))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        BackupConfiguration? config = JsonSerializer.Deserialize<BackupConfiguration>(json);
+                        if (config != null)
+                        {
+                            result[agentId] = config;
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        // Một config hỏng không được làm mất Dashboard của các Agent còn lại.
+                    }
+                }
+                return result;
+            }
+            finally
+            {
+                DbLock.Release();
+            }
+        }
+
+        public static async Task<Dictionary<string, DateTime>> GetLatestSuccessfulSessionStartsAsync()
+        {
+            await InitializeAsync();
+            await DbLock.WaitAsync();
+            try
+            {
+                using SQLiteConnection connection = await OpenConnectionAsync();
+                using SQLiteCommand command = new SQLiteCommand(@"
+SELECT AgentID, StartedAtUtc
+FROM BackupSessions
+WHERE Success = 1
+ORDER BY CompletedAtUtc DESC;", connection);
+                var result = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+                using SQLiteDataReader reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    string agentId = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+                    if (string.IsNullOrWhiteSpace(agentId) || result.ContainsKey(agentId) || reader.IsDBNull(1))
+                    {
+                        continue;
+                    }
+
+                    if (DateTime.TryParse(
+                        reader.GetString(1),
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.RoundtripKind,
+                        out DateTime startedAtUtc))
+                    {
+                        result[agentId] = startedAtUtc;
+                    }
+                }
+                return result;
+            }
+            finally
+            {
+                DbLock.Release();
+            }
+        }
+
         public static async Task SaveSessionAsync(
             BackupManifest manifest,
             string storagePath,

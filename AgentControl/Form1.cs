@@ -64,6 +64,7 @@ namespace AgentControl
             ListboxAgents.AgentOwnerEditRequested += ListboxAgents_AgentOwnerEditRequested;
             lvRemoteFiles.View = View.Details;// Đảm bảo ListView hiển thị dạng bảng và có cột lúc chạy
             InitializeBackupModule();
+            InitializeBackupDashboardModule();
             InitializeTrayModule();
             InitializeRecoveryModule();
         }
@@ -72,6 +73,7 @@ namespace AgentControl
         private Dictionary<string, int> iconCache = new Dictionary<string, int>();
 
         private string selectedAgentId = string.Empty;
+        private bool _syncingRemoteFileChecks;
 
         private sealed class RemoteNodeTag
         {
@@ -236,6 +238,101 @@ namespace AgentControl
             }
 
             return normalized;
+        }
+
+        private static bool IsSameOrDescendantRemotePath(string candidatePath, string ancestorPath)
+        {
+            string candidate = NormalizeRemotePath(candidatePath);
+            string ancestor = NormalizeRemotePath(ancestorPath);
+            if (candidate.Equals(ancestor, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            string ancestorPrefix = ancestor.EndsWith(Path.DirectorySeparatorChar)
+                ? ancestor
+                : ancestor + Path.DirectorySeparatorChar;
+            return candidate.StartsWith(ancestorPrefix, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void SyncVisibleRemoteFileChecksFromTreeNode(TreeNode changedNode)
+        {
+            if (!TryGetRemoteNodeTag(changedNode, out RemoteNodeTag? changedTag) || changedTag == null ||
+                !TryGetRemoteNodeTag(tvRemoteFolders.SelectedNode, out RemoteNodeTag? visibleTag) || visibleTag == null ||
+                !changedTag.AgentId.Equals(visibleTag.AgentId, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            bool appliesToVisibleDirectory = IsSameOrDescendantRemotePath(visibleTag.RemotePath, changedTag.RemotePath);
+            _syncingRemoteFileChecks = true;
+            lvRemoteFiles.BeginUpdate();
+            try
+            {
+                foreach (ListViewItem item in lvRemoteFiles.Items)
+                {
+                    if (item.Tag is not RemoteFileItemTag itemTag ||
+                        !itemTag.AgentId.Equals(changedTag.AgentId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (appliesToVisibleDirectory ||
+                        NormalizeRemotePath(itemTag.FullPath).Equals(
+                            NormalizeRemotePath(changedTag.RemotePath),
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        item.Checked = changedNode.Checked;
+                    }
+                }
+            }
+            finally
+            {
+                lvRemoteFiles.EndUpdate();
+                _syncingRemoteFileChecks = false;
+            }
+        }
+
+        private void SyncVisibleRemoteFileChecksFromTreeSelection()
+        {
+            TreeNode? selectedNode = tvRemoteFolders.SelectedNode;
+            if (!TryGetRemoteNodeTag(selectedNode, out RemoteNodeTag? selectedTag) || selectedTag == null)
+            {
+                return;
+            }
+
+            _syncingRemoteFileChecks = true;
+            try
+            {
+                foreach (ListViewItem item in lvRemoteFiles.Items)
+                {
+                    if (item.Tag is not RemoteFileItemTag itemTag ||
+                        !itemTag.AgentId.Equals(selectedTag.AgentId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    bool isChecked = selectedNode!.Checked;
+                    if (!isChecked && itemTag.IsFolder)
+                    {
+                        TreeNode? matchingNode = selectedNode.Nodes
+                            .Cast<TreeNode>()
+                            .FirstOrDefault(node =>
+                                TryGetRemoteNodeTag(node, out RemoteNodeTag? nodeTag) &&
+                                nodeTag != null &&
+                                NormalizeRemotePath(nodeTag.RemotePath).Equals(
+                                    NormalizeRemotePath(itemTag.FullPath),
+                                    StringComparison.OrdinalIgnoreCase));
+                        isChecked = matchingNode?.Checked == true;
+                    }
+
+                    item.Checked = isChecked;
+                }
+            }
+            finally
+            {
+                _syncingRemoteFileChecks = false;
+            }
         }
 
         private TreeNode CreateRemoteFolderNode(string agentId, string remotePath)
@@ -515,7 +612,6 @@ namespace AgentControl
             {
                 targetNode.Nodes.Add(CreateRemoteFolderNode(agentId, folder.FullPath));
             }
-            ApplyConfiguredBackupChecks(targetNode.Nodes);
             tvRemoteFolders.EndUpdate();
 
             _pendingDirectoryRequests.TryRemove(agentId, out _);
@@ -565,6 +661,8 @@ namespace AgentControl
                     item.SubItems.Add(file.LastWriteTime == default ? "" : file.LastWriteTime.ToString("dd/MM/yyyy HH:mm"));
                     lvRemoteFiles.Items.Add(item);
                 }
+
+                SyncVisibleRemoteFileChecksFromTreeSelection();
             }
             finally
             {
@@ -800,6 +898,7 @@ namespace AgentControl
 
             // Load lại danh sách các Agent cũ đã từng kết nối lên giao diện
             await LoadAllAgentsFromDbAsync();
+            await LoadBackupDashboardDataAsync();
             // Kích hoạt luồng chạy ngầm quét Tim mạch (Heartbeat) chu kỳ 5 giây/lần
             _heartbeatMonitorTask = StartServerHeartbeatMonitorAsync(_controlLifetimeCts.Token);
         }
@@ -1511,7 +1610,6 @@ namespace AgentControl
                                         {
                                             tvRemoteFolders.Nodes.Add(CreateRemoteFolderNode(packet.AgentID, drive));
                                         }
-                                        ApplyConfiguredBackupChecks(tvRemoteFolders.Nodes);
                                     }));
                                 }
                             }
@@ -1736,6 +1834,7 @@ namespace AgentControl
                         FailPendingUploadsForAgent(currentAgentID);
                         await SQLiteHelper.FailPendingDownloadsByAgentAsync(currentAgentID);
                         await SQLiteHelper.SetAgentOfflineAsync(currentAgentID);
+                        SetBackupDashboardAgentOnline(currentAgentID, false);
                         if (!IsDisposed && IsHandleCreated)
                         {
                             BeginInvoke(new Action(async () =>
@@ -1770,6 +1869,7 @@ namespace AgentControl
                             // Cập nhật SQLite và làm mới UI [cite: 885]
                             await SQLiteHelper.FailPendingDownloadsByAgentAsync(agentId);
                             await SQLiteHelper.SetAgentOfflineAsync(agentId);
+                            SetBackupDashboardAgentOnline(agentId, false);
                             if (!IsDisposed && IsHandleCreated)
                             {
                                 BeginInvoke(new Action(async () =>
@@ -2841,6 +2941,11 @@ namespace AgentControl
         private void lvRemoteFiles_ItemCheck(object sender, ItemCheckEventArgs e)
         {
 
+            if (_syncingRemoteFileChecks)
+            {
+                return;
+            }
+
 
             // Lấy tọa độ con trỏ chuột hiện tại so với cái ListView
             System.Drawing.Point mousePos = lvRemoteFiles.PointToClient(Cursor.Position);
@@ -2883,6 +2988,7 @@ namespace AgentControl
                 agent.ContainsKey("OwnerName") ? agent["OwnerName"] : string.Empty
                 );
             }
+            SyncBackupDashboardAgents(dbAgents);
         }
         private async void ListboxAgents_AgentDeleteClicked(object? sender, NHFUiControls.AgentDeleteClickedEventArgs e)
         {
@@ -2938,6 +3044,7 @@ namespace AgentControl
                     tvRemoteFolders.Nodes.Clear();
                     lvRemoteFiles.Items.Clear();
                 }
+                RemoveBackupDashboardAgent(agent.AgentID);
             }
             catch (Exception ex)
             {

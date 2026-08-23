@@ -61,6 +61,7 @@
             PanelHeader = new Panel();
             pictureBox1 = new PictureBox();
             groupBox4 = new GroupBox();
+            btnrecovery = new Button();
             btnDeploy = new Button();
             btnDeleteExt = new Button();
             btnAddExt = new Button();
@@ -82,7 +83,20 @@
             groupBox3 = new GroupBox();
             groupBox2 = new GroupBox();
             toolTip1 = new ToolTip(components);
-            btnrecovery = new Button();
+            panel3 = new Panel();
+            dgvDashboard = new DataGridView();
+            dashboardAgent = new DataGridViewTextBoxColumn();
+            dashboardAgentName = new DataGridViewTextBoxColumn();
+            dashboardOS = new DataGridViewTextBoxColumn();
+            dashboardStoragePath = new DataGridViewTextBoxColumn();
+            dashboardFullBackupDays = new DataGridViewTextBoxColumn();
+            dashboardBackupTime = new DataGridViewTextBoxColumn();
+            dashboardBackupIntervalDays = new DataGridViewTextBoxColumn();
+            dashboardProgress = new BackupDashboardProgressBarColumn();
+            dashboardCurrentFile = new DataGridViewTextBoxColumn();
+            dashboardSpeed = new DataGridViewTextBoxColumn();
+            dashboardStartedAt = new DataGridViewTextBoxColumn();
+            dashboardStatus = new DataGridViewTextBoxColumn();
             groupBox1.SuspendLayout();
             grbchecksum.SuspendLayout();
             panelZone1.SuspendLayout();
@@ -98,6 +112,8 @@
             ((System.ComponentModel.ISupportInitialize)numericUpDown2).BeginInit();
             groupBox3.SuspendLayout();
             groupBox2.SuspendLayout();
+            panel3.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)dgvDashboard).BeginInit();
             SuspendLayout();
             // 
             // groupBox1
@@ -258,7 +274,7 @@
             panelZone1.Dock = DockStyle.Left;
             panelZone1.Location = new Point(0, 172);
             panelZone1.Name = "panelZone1";
-            panelZone1.Size = new Size(291, 687);
+            panelZone1.Size = new Size(291, 509);
             panelZone1.TabIndex = 1;
             // 
             // ListboxAgents
@@ -278,7 +294,7 @@
             ListboxAgents.Name = "ListboxAgents";
             ListboxAgents.NormalCardColor = Color.White;
             ListboxAgents.SelectedCardColor = Color.FromArgb(205, 220, 242);
-            ListboxAgents.Size = new Size(291, 687);
+            ListboxAgents.Size = new Size(291, 509);
             ListboxAgents.TabIndex = 4;
             ListboxAgents.SelectedIndexChanged += ListboxAgents_SelectedIndexChanged;
             // 
@@ -288,7 +304,7 @@
             panelZone2.Dock = DockStyle.Left;
             panelZone2.Location = new Point(291, 172);
             panelZone2.Name = "panelZone2";
-            panelZone2.Size = new Size(294, 687);
+            panelZone2.Size = new Size(294, 509);
             panelZone2.TabIndex = 2;
             // 
             // tvRemoteFolders
@@ -298,7 +314,7 @@
             tvRemoteFolders.Dock = DockStyle.Fill;
             tvRemoteFolders.Location = new Point(0, 0);
             tvRemoteFolders.Name = "tvRemoteFolders";
-            tvRemoteFolders.Size = new Size(294, 687);
+            tvRemoteFolders.Size = new Size(294, 509);
             tvRemoteFolders.TabIndex = 0;
             tvRemoteFolders.BeforeCollapse += tvRemoteFolders_BeforeCollapse;
             tvRemoteFolders.BeforeExpand += tvRemoteFolders_BeforeExpand;
@@ -310,7 +326,7 @@
             dvgUploads.Dock = DockStyle.Fill;
             dvgUploads.Location = new Point(0, 0);
             dvgUploads.Name = "dvgUploads";
-            dvgUploads.Size = new Size(719, 687);
+            dvgUploads.Size = new Size(719, 509);
             dvgUploads.TabIndex = 8;
             // 
             // dgvDownloads
@@ -319,7 +335,7 @@
             dgvDownloads.Dock = DockStyle.Fill;
             dgvDownloads.Location = new Point(0, 0);
             dgvDownloads.Name = "dgvDownloads";
-            dgvDownloads.Size = new Size(719, 687);
+            dgvDownloads.Size = new Size(719, 509);
             dgvDownloads.TabIndex = 4;
             // 
             // tmrUpdateUI
@@ -335,7 +351,7 @@
             lvRemoteFiles.GridLines = true;
             lvRemoteFiles.Location = new Point(0, 0);
             lvRemoteFiles.Name = "lvRemoteFiles";
-            lvRemoteFiles.Size = new Size(543, 687);
+            lvRemoteFiles.Size = new Size(543, 509);
             lvRemoteFiles.TabIndex = 3;
             lvRemoteFiles.UseCompatibleStateImageBehavior = false;
             lvRemoteFiles.View = View.Details;
@@ -366,7 +382,7 @@
             panel1.Dock = DockStyle.Left;
             panel1.Location = new Point(585, 172);
             panel1.Name = "panel1";
-            panel1.Size = new Size(543, 687);
+            panel1.Size = new Size(543, 509);
             panel1.TabIndex = 5;
             // 
             // panel2
@@ -376,7 +392,7 @@
             panel2.Dock = DockStyle.Fill;
             panel2.Location = new Point(1128, 172);
             panel2.Name = "panel2";
-            panel2.Size = new Size(719, 687);
+            panel2.Size = new Size(719, 509);
             panel2.TabIndex = 6;
             // 
             // PanelHeader
@@ -432,6 +448,17 @@
             groupBox4.TabIndex = 17;
             groupBox4.TabStop = false;
             groupBox4.Text = "Backup";
+            // 
+            // btnrecovery
+            // 
+            btnrecovery.Font = new Font("Segoe UI", 11F, FontStyle.Bold);
+            btnrecovery.ForeColor = Color.Blue;
+            btnrecovery.Location = new Point(772, 45);
+            btnrecovery.Name = "btnrecovery";
+            btnrecovery.Size = new Size(131, 54);
+            btnrecovery.TabIndex = 4;
+            btnrecovery.Text = "Khôi phục dữ liệu";
+            btnrecovery.UseVisualStyleBackColor = true;
             // 
             // btnDeploy
             // 
@@ -625,16 +652,122 @@
             groupBox2.TabStop = false;
             groupBox2.Text = "Download/Upload";
             // 
-            // btnrecovery
+            // panel3
             // 
-            btnrecovery.Font = new Font("Segoe UI", 11F, FontStyle.Bold);
-            btnrecovery.ForeColor = Color.Blue;
-            btnrecovery.Location = new Point(772, 45);
-            btnrecovery.Name = "btnrecovery";
-            btnrecovery.Size = new Size(131, 54);
-            btnrecovery.TabIndex = 4;
-            btnrecovery.Text = "Khôi phục dữ liệu";
-            btnrecovery.UseVisualStyleBackColor = true;
+            panel3.Controls.Add(dgvDashboard);
+            panel3.Dock = DockStyle.Bottom;
+            panel3.Location = new Point(0, 681);
+            panel3.Name = "panel3";
+            panel3.Size = new Size(1847, 178);
+            panel3.TabIndex = 19;
+            // 
+            // dgvDashboard
+            // 
+            dgvDashboard.AllowUserToAddRows = false;
+            dgvDashboard.AllowUserToDeleteRows = false;
+            dgvDashboard.AllowUserToResizeRows = false;
+            dgvDashboard.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            dgvDashboard.Columns.AddRange(new DataGridViewColumn[] { dashboardAgent, dashboardAgentName, dashboardOS, dashboardStoragePath, dashboardFullBackupDays, dashboardBackupTime, dashboardBackupIntervalDays, dashboardProgress, dashboardCurrentFile, dashboardSpeed, dashboardStartedAt, dashboardStatus });
+            dgvDashboard.Dock = DockStyle.Fill;
+            dgvDashboard.Location = new Point(0, 0);
+            dgvDashboard.MultiSelect = false;
+            dgvDashboard.Name = "dgvDashboard";
+            dgvDashboard.ReadOnly = true;
+            dgvDashboard.RowHeadersVisible = false;
+            dgvDashboard.RowTemplate.Height = 30;
+            dgvDashboard.ScrollBars = ScrollBars.Vertical;
+            dgvDashboard.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            dgvDashboard.Size = new Size(1847, 178);
+            dgvDashboard.TabIndex = 0;
+            // 
+            // dashboardAgent
+            // 
+            dashboardAgent.HeaderText = "Agent";
+            dashboardAgent.Name = "dashboardAgent";
+            dashboardAgent.ReadOnly = true;
+            dashboardAgent.Width = 125;
+            // 
+            // dashboardAgentName
+            // 
+            dashboardAgentName.HeaderText = "AgentName";
+            dashboardAgentName.Name = "dashboardAgentName";
+            dashboardAgentName.ReadOnly = true;
+            dashboardAgentName.Width = 125;
+            // 
+            // dashboardOS
+            // 
+            dashboardOS.HeaderText = "OS";
+            dashboardOS.Name = "dashboardOS";
+            dashboardOS.ReadOnly = true;
+            dashboardOS.Width = 95;
+            // 
+            // dashboardStoragePath
+            // 
+            dashboardStoragePath.HeaderText = "Đường dẫn lưu file backup";
+            dashboardStoragePath.Name = "dashboardStoragePath";
+            dashboardStoragePath.ReadOnly = true;
+            dashboardStoragePath.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+            dashboardStoragePath.FillWeight = 45F;
+            dashboardStoragePath.MinimumWidth = 180;
+            // 
+            // dashboardFullBackupDays
+            // 
+            dashboardFullBackupDays.HeaderText = "Số ngày tạo Full Backup";
+            dashboardFullBackupDays.Name = "dashboardFullBackupDays";
+            dashboardFullBackupDays.ReadOnly = true;
+            dashboardFullBackupDays.Width = 115;
+            // 
+            // dashboardBackupTime
+            // 
+            dashboardBackupTime.HeaderText = "Thời gian backup";
+            dashboardBackupTime.Name = "dashboardBackupTime";
+            dashboardBackupTime.ReadOnly = true;
+            dashboardBackupTime.Width = 105;
+            // 
+            // dashboardBackupIntervalDays
+            // 
+            dashboardBackupIntervalDays.HeaderText = "Backup mỗi (ngày)";
+            dashboardBackupIntervalDays.Name = "dashboardBackupIntervalDays";
+            dashboardBackupIntervalDays.ReadOnly = true;
+            dashboardBackupIntervalDays.Width = 110;
+            // 
+            // dashboardProgress
+            // 
+            dashboardProgress.HeaderText = "Tiến độ";
+            dashboardProgress.Name = "dashboardProgress";
+            dashboardProgress.ReadOnly = true;
+            dashboardProgress.Resizable = DataGridViewTriState.True;
+            dashboardProgress.Width = 175;
+            // 
+            // dashboardCurrentFile
+            // 
+            dashboardCurrentFile.HeaderText = "File hiện tại";
+            dashboardCurrentFile.Name = "dashboardCurrentFile";
+            dashboardCurrentFile.ReadOnly = true;
+            dashboardCurrentFile.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+            dashboardCurrentFile.FillWeight = 55F;
+            dashboardCurrentFile.MinimumWidth = 220;
+            // 
+            // dashboardSpeed
+            // 
+            dashboardSpeed.HeaderText = "Tốc độ";
+            dashboardSpeed.Name = "dashboardSpeed";
+            dashboardSpeed.ReadOnly = true;
+            dashboardSpeed.Width = 90;
+            // 
+            // dashboardStartedAt
+            // 
+            dashboardStartedAt.HeaderText = "Bắt đầu";
+            dashboardStartedAt.Name = "dashboardStartedAt";
+            dashboardStartedAt.ReadOnly = true;
+            dashboardStartedAt.Width = 135;
+            // 
+            // dashboardStatus
+            // 
+            dashboardStatus.HeaderText = "Trạng thái";
+            dashboardStatus.Name = "dashboardStatus";
+            dashboardStatus.ReadOnly = true;
+            dashboardStatus.Width = 190;
             // 
             // frmToolBackup
             // 
@@ -645,6 +778,7 @@
             Controls.Add(panel1);
             Controls.Add(panelZone2);
             Controls.Add(panelZone1);
+            Controls.Add(panel3);
             Controls.Add(PanelHeader);
             Icon = (Icon)resources.GetObject("$this.Icon");
             Name = "frmToolBackup";
@@ -670,6 +804,8 @@
             groupBox3.ResumeLayout(false);
             groupBox3.PerformLayout();
             groupBox2.ResumeLayout(false);
+            panel3.ResumeLayout(false);
+            ((System.ComponentModel.ISupportInitialize)dgvDashboard).EndInit();
             ResumeLayout(false);
             PerformLayout();
         }
@@ -728,5 +864,19 @@
         private PictureBox pictureBox1;
         private Button btnDeploy;
         private Button btnrecovery;
+        private Panel panel3;
+        private DataGridView dgvDashboard;
+        private DataGridViewTextBoxColumn dashboardAgent;
+        private DataGridViewTextBoxColumn dashboardAgentName;
+        private DataGridViewTextBoxColumn dashboardOS;
+        private DataGridViewTextBoxColumn dashboardStoragePath;
+        private DataGridViewTextBoxColumn dashboardFullBackupDays;
+        private DataGridViewTextBoxColumn dashboardBackupTime;
+        private DataGridViewTextBoxColumn dashboardBackupIntervalDays;
+        private BackupDashboardProgressBarColumn dashboardProgress;
+        private DataGridViewTextBoxColumn dashboardCurrentFile;
+        private DataGridViewTextBoxColumn dashboardSpeed;
+        private DataGridViewTextBoxColumn dashboardStartedAt;
+        private DataGridViewTextBoxColumn dashboardStatus;
     }
 }

@@ -256,6 +256,18 @@ namespace AgentService
                 deleted.AddRange(previous.Values.Where(old => !scan.Files.ContainsKey(old.FullPath)));
             }
 
+            List<BackupFileSnapshot> filesToUpload = (isInitialFull
+                    ? scan.Files.Values
+                    : created.Concat(modified))
+                .ToList();
+            long plannedTotalBytes = filesToUpload.Sum(file => file.Size);
+            var progress = new BackupProgressTracker(
+                sessionName,
+                backupType,
+                startedAtUtc,
+                filesToUpload.Count,
+                plannedTotalBytes);
+
             BackupManifest manifest = new BackupManifest
             {
                 AgentID = _agentId,
@@ -290,8 +302,8 @@ namespace AgentService
                         BackupType = backupType,
                         StartedAtUtc = startedAtUtc,
                         IsResumableFirst = isInitialFull,
-                        PlannedFileCount = isInitialFull ? scan.Files.Count : 0,
-                        PlannedTotalBytes = isInitialFull ? scan.Files.Values.Sum(file => file.Size) : 0
+                        PlannedFileCount = progress.PlannedFileCount,
+                        PlannedTotalBytes = progress.PlannedTotalBytes
                     })
                 }, token);
 
@@ -303,9 +315,6 @@ namespace AgentService
 
                 HashSet<string> failedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 int skippedSinceStateCheckpoint = 0;
-                IEnumerable<BackupFileSnapshot> filesToUpload = isInitialFull
-                    ? scan.Files.Values
-                    : created.Concat(modified);
                 foreach (BackupFileSnapshot file in filesToUpload)
                 {
                     if (!_isConnected())
@@ -317,6 +326,7 @@ namespace AgentService
                     {
                         failedPaths.Add(file.FullPath);
                         await NotifyFirstFileSkippedAsync(sessionName, file, savedReason, token);
+                        await MarkBackupFileProcessedAsync(progress, file, token);
                         continue;
                     }
 
@@ -324,7 +334,7 @@ namespace AgentService
                     {
                         if (isInitialFull)
                         {
-                            bool uploaded = await SendResumableFirstFileAsync(sessionName, file, token);
+                            bool uploaded = await SendResumableFirstFileAsync(sessionName, file, progress, token);
                             if (!uploaded)
                             {
                                 failedPaths.Add(file.FullPath);
@@ -339,7 +349,7 @@ namespace AgentService
                         }
                         else
                         {
-                            await SendFileAsync(sessionName, file, token);
+                            await SendFileAsync(sessionName, file, progress, token);
                         }
                     }
                     catch (Exception ex)
@@ -366,7 +376,11 @@ namespace AgentService
                             manifest.Errors.Add($"Không upload được {file.FullPath}: {ex.Message}");
                         }
                     }
+
+                    await MarkBackupFileProcessedAsync(progress, file, token);
                 }
+
+                await SendBackupProgressAsync(progress, string.Empty, progress.ProcessedBytes, token, force: true);
 
                 // Tao entry sau upload de manifest mang SHA-256 da tinh tren dung noi dung da gui.
                 manifest.Created = isInitialFull
@@ -439,6 +453,7 @@ namespace AgentService
         private async Task<bool> SendResumableFirstFileAsync(
             string sessionName,
             BackupFileSnapshot plannedSnapshot,
+            BackupProgressTracker progress,
             CancellationToken token)
         {
             FileInfo before = new FileInfo(plannedSnapshot.FullPath);
@@ -485,9 +500,15 @@ namespace AgentService
                 {
                     return false;
                 }
+                await ReportBackupFilePositionAsync(
+                    progress,
+                    transferSnapshot,
+                    info.Completed ? transferSnapshot.Size : info.Offset,
+                    0,
+                    token);
                 if (!info.Completed)
                 {
-                    await SendFileAsync(sessionName, transferSnapshot, token, info.Offset);
+                    await SendFileAsync(sessionName, transferSnapshot, progress, token, info.Offset);
                 }
                 else
                 {
@@ -535,6 +556,7 @@ namespace AgentService
         private async Task SendFileAsync(
             string sessionName,
             BackupFileSnapshot snapshot,
+            BackupProgressTracker progress,
             CancellationToken token,
             long startOffset = 0)
         {
@@ -577,6 +599,7 @@ namespace AgentService
                 {
                     snapshot.ContentSha256 = Convert.ToHexString(contentHash.GetHashAndReset());
                     await _sendChunk(CreateChunkHeader(sessionName, snapshot, offset, true), buffer, 0, token);
+                    await ReportBackupFilePositionAsync(progress, snapshot, offset, 0, token);
                     return;
                 }
 
@@ -598,6 +621,7 @@ namespace AgentService
                     await _sendChunk(CreateChunkHeader(sessionName, snapshot, offset, isLast), buffer, read, token);
                     offset += read;
                     remaining -= read;
+                    await ReportBackupFilePositionAsync(progress, snapshot, offset, read, token);
                 }
 
                 if (source.Length != snapshot.Size ||
@@ -610,6 +634,78 @@ namespace AgentService
             {
                 ArrayPool<byte>.Shared.Return(buffer);
             }
+        }
+
+        private async Task ReportBackupFilePositionAsync(
+            BackupProgressTracker progress,
+            BackupFileSnapshot snapshot,
+            long filePosition,
+            int transferredChunkBytes,
+            CancellationToken token)
+        {
+            progress.TransferredBytes += Math.Max(0, transferredChunkBytes);
+            long position = Math.Clamp(filePosition, 0, snapshot.Size);
+            long processedBytes = Math.Min(
+                progress.PlannedTotalBytes,
+                progress.ProcessedBytes + position);
+            await SendBackupProgressAsync(progress, snapshot.FullPath, processedBytes, token);
+        }
+
+        private async Task MarkBackupFileProcessedAsync(
+            BackupProgressTracker progress,
+            BackupFileSnapshot snapshot,
+            CancellationToken token)
+        {
+            progress.ProcessedBytes = Math.Min(
+                progress.PlannedTotalBytes,
+                progress.ProcessedBytes + Math.Max(0, snapshot.Size));
+            progress.ProcessedFileCount = Math.Min(
+                progress.PlannedFileCount,
+                progress.ProcessedFileCount + 1);
+            await SendBackupProgressAsync(progress, snapshot.FullPath, progress.ProcessedBytes, token);
+        }
+
+        private async Task SendBackupProgressAsync(
+            BackupProgressTracker progress,
+            string currentFile,
+            long processedBytes,
+            CancellationToken token,
+            bool force = false)
+        {
+            DateTime nowUtc = DateTime.UtcNow;
+            if (!force &&
+                progress.LastReportUtc.HasValue &&
+                nowUtc - progress.LastReportUtc.Value < TimeSpan.FromMilliseconds(250))
+            {
+                return;
+            }
+
+            int percentage = BackupProgressCalculator.CalculatePercentage(
+                progress.PlannedFileCount,
+                progress.ProcessedFileCount,
+                progress.PlannedTotalBytes,
+                processedBytes);
+
+            await _sendPacket(new SocketPacket
+            {
+                Type = BackupPacketTypes.Progress,
+                AgentID = _agentId,
+                Data = JsonSerializer.Serialize(new BackupProgressUpdate
+                {
+                    AgentID = _agentId,
+                    SessionName = progress.SessionName,
+                    BackupType = progress.BackupType,
+                    StartedAtUtc = progress.StartedAtUtc,
+                    PlannedFileCount = progress.PlannedFileCount,
+                    ProcessedFileCount = progress.ProcessedFileCount,
+                    PlannedTotalBytes = progress.PlannedTotalBytes,
+                    ProcessedBytes = processedBytes,
+                    TransferredBytes = progress.TransferredBytes,
+                    ProgressPercentage = percentage,
+                    CurrentFile = currentFile ?? string.Empty
+                })
+            }, token);
+            progress.LastReportUtc = nowUtc;
         }
 
         private BackupFileChunkHeader CreateChunkHeader(
@@ -630,6 +726,33 @@ namespace AgentService
                 LastWriteTimeUtc = snapshot.LastWriteTimeUtc,
                 ContentSha256 = isLast ? snapshot.ContentSha256 : string.Empty
             };
+        }
+
+        private sealed class BackupProgressTracker
+        {
+            public string SessionName { get; }
+            public string BackupType { get; }
+            public DateTime StartedAtUtc { get; }
+            public long PlannedFileCount { get; }
+            public long PlannedTotalBytes { get; }
+            public long ProcessedFileCount { get; set; }
+            public long ProcessedBytes { get; set; }
+            public long TransferredBytes { get; set; }
+            public DateTime? LastReportUtc { get; set; }
+
+            public BackupProgressTracker(
+                string sessionName,
+                string backupType,
+                DateTime startedAtUtc,
+                long plannedFileCount,
+                long plannedTotalBytes)
+            {
+                SessionName = sessionName;
+                BackupType = backupType;
+                StartedAtUtc = startedAtUtc;
+                PlannedFileCount = Math.Max(0, plannedFileCount);
+                PlannedTotalBytes = Math.Max(0, plannedTotalBytes);
+            }
         }
 
         private async Task SaveConfigurationToAppSettingsAsync(BackupConfiguration config, CancellationToken token)

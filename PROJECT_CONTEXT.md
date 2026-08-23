@@ -679,3 +679,21 @@ git status --short --branch
 - Nguyen nhan: `RunWithLoadingAsync` dong `RecoveryLoadingForm` trong luc owner `frmRecovery` van `Enabled=false`; Windows khong co owner dang enabled de tra focus.
 - Da doi dung thu tu cleanup: bat lai `frmRecovery` truoc, sau do moi dong loading form. Khong dung `Activate()`/`SetForegroundWindow` cuong buc, nen khong giat focus neu nguoi dung chu dong chuyen sang ung dung khac trong luc nap lau.
 - Full solution Debug va Release build 0 error, 0 warning; toan bo test Debug va Release dat 58/58 moi cau hinh. Lan build Debug dau bi process dang chay khoa DLL, sau khi process dung da rebuild/test lai thanh cong.
+
+## 18. Dashboard tien do Backup tat ca Agent - 2026-08-23
+
+- `dgvDashboard` nam duoi form chinh, moi Agent mot dong. Bay cot dau lay tu card/DB Agent va `BackupConfigs`: ten may, username, OS chuan hoa Windows 10/Windows 11/Khac, duong dan luu, chu ky Full, gio backup va chu ky INC.
+- Module UI/state tach rieng tai `AgentControl/Form1.BackupDashboard.cs`, `BackupDashboardState.cs` va `BackupDashboardProgressBarCell.cs`; khong dung progress cell cua download/upload.
+- Progress dashboard:
+  - `DANG GUI`: progress xanh, phan tram, file day du tren Agent, toc do va gio bat dau.
+  - Mat socket: progress do, giu nguyen phan tram cuoi va trang thai `MAT KET NOI`.
+  - Hoan tat va Agent online: bo progress bar, hien `HOAN THANH yyyy-MM-dd` theo ngay `StartedAtUtc` cua phien, khong phai ngay truyen xong; trang thai `DANG CHO DEN GIO BACKUP`.
+  - Loi phien khi socket van online hien `LOI BACKUP` mau do.
+- Shared protocol them `BACKUP_PROGRESS`/`BackupProgressUpdate`. Agent gui toi da 4 cap nhat/giay va ep gui moc cuoi 100%, tranh flood UI voi nhieu file nho. INC gio gui dung tong file/tong byte thay vi 0; FIRST resume tinh tu offset Control da co; file skipped van duoc tinh la da xu ly de progress khong ket.
+- Dashboard nap lai config va ngay phien thanh cong gan nhat tu `BackupManagement.db`; config JSON hong cua mot Agent khong lam Dashboard/Control crash. Agent bi xoa khoi DB card khong tu xuat hien lai chi vi con config backup cu.
+- Cay thu muc khong con tu tick lai `SourcePaths` cu khi Agent ket noi/chon/tai node. Tick thu cong tren cay duoc dong bo mot chieu sang checkbox `lvRemoteFiles`; doi Agent se bo tick ca hai vung.
+- Version Control/Agent nang tu `1.8` len `1.9` de Agent cu duoc nhac auto-update. Goi self-contained da publish lai:
+  - `AgentServices.exe`: SHA-256 `1C73DEBFCBFF39A900B8FE43484ED4A0904827C3AB6ADD55F709381FF9378C0B`.
+  - `AgentUpdater.exe`: SHA-256 `1AB8CEFC541D8CF7F5F4E69C0FF5A976E4BEC8923264920E2DA525C8B7853F35`.
+- Test doc lap them `BackupDashboardTests`: FIRST/INC state, resume offset, file/plan 0 byte, mat ket noi/reconnect, reset speed, packet sai Agent/session, so am, session retry cu, ngay khoi tao/hoan tat tre, config DB va so lieu cuc lon khong overflow.
+- Ket qua cuoi: build Debug/Release 0 error, 0 warning; test Debug 80/80, Release 80/80; lap Debug 3 lan 240/240; smoke AgentControl va AgentServices self-contained OK; package source/Debug/Release cung hash; khong co NuGet vulnerable/deprecated theo source hien tai.

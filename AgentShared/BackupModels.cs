@@ -15,6 +15,7 @@ namespace AgentShared
         public const string SessionReady = "BACKUP_SESSION_READY";
         public const string SessionComplete = "BACKUP_SESSION_COMPLETE";
         public const string SessionResult = "BACKUP_SESSION_RESULT";
+        public const string Progress = "BACKUP_PROGRESS";
         public const string FirstFileResumeQuery = "BACKUP_FIRST_FILE_RESUME_QUERY";
         public const string FirstFileResumeInfo = "BACKUP_FIRST_FILE_RESUME_INFO";
         public const string FirstFileSkip = "BACKUP_FIRST_FILE_SKIP";
@@ -100,6 +101,25 @@ namespace AgentShared
         // INC co the da commit thanh cong trong khi buoc tong hop Full can thu lai vao ky sau.
         public bool SyntheticFullCompleted { get; set; } = true;
         public string Message { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Tiến độ tổng của một phiên backup. Agent gửi gói nhỏ này sau mỗi binary chunk;
+    /// dữ liệu file vẫn đi bằng binary frame riêng như trước.
+    /// </summary>
+    public sealed class BackupProgressUpdate
+    {
+        public string AgentID { get; set; } = string.Empty;
+        public string SessionName { get; set; } = string.Empty;
+        public string BackupType { get; set; } = string.Empty;
+        public DateTime StartedAtUtc { get; set; }
+        public long PlannedFileCount { get; set; }
+        public long ProcessedFileCount { get; set; }
+        public long PlannedTotalBytes { get; set; }
+        public long ProcessedBytes { get; set; }
+        public long TransferredBytes { get; set; }
+        public int ProgressPercentage { get; set; }
+        public string CurrentFile { get; set; } = string.Empty;
     }
 
     // BO SUNG MODULE BACKUP - FIRST RESUME: hoi offset cua mot file truoc khi tiep tuc upload.

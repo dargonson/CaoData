@@ -17,8 +17,6 @@ namespace AgentControl
         private readonly BackupReceiver _backupReceiver = new BackupReceiver();
         private readonly ConcurrentDictionary<string, TaskCompletionSource<BackupConfigAck>> _pendingBackupConfigAcks =
             new ConcurrentDictionary<string, TaskCompletionSource<BackupConfigAck>>(StringComparer.OrdinalIgnoreCase);
-        private readonly HashSet<string> _configuredBackupSourcePaths =
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private bool _applyingBackupTreeChecks;
         private int _backupConfigLoadVersion;
 
@@ -93,12 +91,6 @@ namespace AgentControl
 
             ReplaceListItems(listBox1, config.ExcludedFolders);
             ReplaceListItems(listBox2, config.ExcludedPatterns);
-            foreach (string path in config.SourcePaths.Where(path => !string.IsNullOrWhiteSpace(path)))
-            {
-                _configuredBackupSourcePaths.Add(NormalizeBackupPath(path));
-            }
-
-            ApplyConfiguredBackupChecks(tvRemoteFolders.Nodes);
         }
 
         private string GetSelectedBackupAgentId()
@@ -273,6 +265,7 @@ namespace AgentControl
 
                 // Chi chot DB Control sau khi Agent da ghi appsettings va ACK thanh cong.
                 await BackupRepository.SaveConfigAsync(config);
+                BackupDashboardConfigurationSaved(config);
                 MessageBox.Show(ack.Message, "Backup", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
@@ -316,6 +309,7 @@ namespace AgentControl
                         await _backupReceiver.BeginSessionAsync(request);
                         result.Success = true;
                         result.Message = "Control đã sẵn sàng nhận backup.";
+                        BackupDashboardSessionStarted(request);
                     }
                     catch (Exception ex)
                     {
@@ -332,6 +326,18 @@ namespace AgentControl
                 return true;
             }
 
+            if (packet.Type == BackupPacketTypes.Progress)
+            {
+                BackupProgressUpdate? progress = JsonSerializer.Deserialize<BackupProgressUpdate>(packet.Data);
+                if (progress == null)
+                {
+                    throw new InvalidDataException("Dữ liệu tiến độ backup không hợp lệ.");
+                }
+                EnsureBackupPayloadAgent(packet.AgentID, progress.AgentID);
+                BackupDashboardProgressReceived(progress);
+                return true;
+            }
+
             if (packet.Type == BackupPacketTypes.SessionComplete)
             {
                 BackupManifest? manifest = JsonSerializer.Deserialize<BackupManifest>(packet.Data);
@@ -345,6 +351,18 @@ namespace AgentControl
                             Message = "AgentID trong manifest không khớp kết nối đã xác thực."
                         }
                         : await _backupReceiver.CompleteSessionAsync(manifest);
+
+                if (manifest != null && IsBackupPayloadAgent(packet.AgentID, manifest.AgentID))
+                {
+                    if (result.Success)
+                    {
+                        BackupDashboardSessionCompleted(packet.AgentID, manifest.SessionName, manifest.StartedAtUtc);
+                    }
+                    else
+                    {
+                        BackupDashboardSessionFailed(packet.AgentID, manifest.SessionName);
+                    }
+                }
 
                 await SendPacketToAgentAsync(packet.AgentID, client, new SocketPacket
                 {
@@ -418,29 +436,7 @@ namespace AgentControl
             try
             {
                 SetChildCheckState(e.Node.Nodes, e.Node.Checked);
-            }
-            finally
-            {
-                _applyingBackupTreeChecks = false;
-            }
-        }
-
-        private void ApplyConfiguredBackupChecks(TreeNodeCollection nodes)
-        {
-            _applyingBackupTreeChecks = true;
-            try
-            {
-                foreach (TreeNode node in nodes)
-                {
-                    if (TryGetRemoteNodeTag(node, out RemoteNodeTag? tag) && tag != null)
-                    {
-                        string path = NormalizeBackupPath(tag.RemotePath);
-                        node.Checked = _configuredBackupSourcePaths.Contains(path) ||
-                                       (node.Parent?.Checked ?? false);
-                    }
-
-                    ApplyConfiguredBackupChecks(node.Nodes);
-                }
+                SyncVisibleRemoteFileChecksFromTreeNode(e.Node);
             }
             finally
             {
@@ -477,8 +473,8 @@ namespace AgentControl
             dateTimePicker1.Value = DateTime.Today;
             listBox1.Items.Clear();
             listBox2.Items.Clear();
-            _configuredBackupSourcePaths.Clear();
             ClearTreeChecks(tvRemoteFolders.Nodes);
+            SyncVisibleRemoteFileChecksFromTreeSelection();
             AddDefaultBackupPatterns();
         }
 
