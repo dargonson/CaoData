@@ -455,7 +455,7 @@ git status --short --branch
 
 ### 12.5 Chua lam / can test thuc te
 
-- Chua lam restore theo dung pham vi da chot.
+- Da co restore file/folder ve mot thu muc tren may AgentControl; chua co luong day nguoc restore xuong AgentServices.
 - Scanner hien quet metadata full va so sanh state. Chua doc USN Journal; code scanner da tach rieng de toi uu USN sau khi luong FIRST/INC duoc test on dinh.
 - FIRST dau tien khong con dua toan bo danh sach `Created` vao goi SessionComplete. Control tao manifest streaming tu DB theo lo; Agent van scan metadata vao dictionary/state JSON de giu co dinh ke hoach FIRST qua restart.
 - Da build full solution thanh cong, 0 error. Can test thuc te voi mot thu muc nho truoc:
@@ -492,6 +492,7 @@ git status --short --branch
 ## 14. Ngan system sleep khi truyen du lieu - 2026-08-24
 
 - Module dung chung `AgentShared/SystemSleepBlocker.cs` dung Windows Power Request (`SystemRequired`) theo co che dem tham chieu, ho tro nhieu tac vu truyen file chay dong thoi.
+- Cac ham native `PowerCreateRequest`, `PowerSetRequest`, `PowerClearRequest` phai import tu `Kernel32.dll` (khong phai `PowrProf.dll`). Da test runtime tao/giai phong power request thanh cong ngay 2026-08-25.
 - Chi yeu cau Windows khong dua may vao sleep; khong dung `DisplayRequired`, vi vay man hinh van duoc phep tat theo thoi gian da cai trong Windows.
 - Power Request khong ngan shutdown/restart. Khi chuong trinh/tac vu ket thuc, request duoc clear va dispose.
 - AgentControl giu mot sleep block trong suot vong doi `Application.Run`; thu xuong tray van tiep tuc chan system sleep cho den khi chon `Exit`.
@@ -499,3 +500,58 @@ git status --short --branch
   - Control upload file xuong Agent: giu tu chunk dau den chunk cuoi; neu loi/mat ket noi/service stop thi tu giai phong.
   - Control download file tu Agent: giu trong suot qua trinh checksum/doc/gui file.
   - FIRST/INC backup: giu trong toan bo phien quet, upload va cho Control chot ket qua.
+
+## 15. Khoi phuc file backup ve may AgentControl - 2026-08-25
+
+### 15.1 Checkpoint va pham vi
+
+- Checkpoint truoc khi lam restore: commit `757753a` - `TRƯỚC KHI LÀM KHÔI PHỤC`.
+- Pham vi hien tai: chon file/folder trong ban backup va trich xuat ve mot thu muc tren may AgentControl; khong day file nguoc xuong AgentServices va khong mirror/xoa file dich.
+- Nut `btnrecovery` tren form chinh yeu cau chon Agent, sau do mo modal `frmRecovery`. Phan noi nut duoc tach tai `AgentControl/Form1.Recovery.cs`.
+
+### 15.2 Chon ngay va dung snapshot
+
+- Khi `frmRecovery` load, doc `ControlStoragePath` cua Agent va chi quet folder hoan chinh co dang:
+  - `FIRST-{AgentID}-yyyy-MM-dd`
+  - `INC-{AgentID}-yyyy-MM-dd`
+- Chi folder co `manifest.json` va 10 ky tu cuoi parse dung `yyyy-MM-dd` moi duoc dua vao `cbxlistday`; `.inprogress`, `.building` va folder loi bi bo qua.
+- Moi ngay chi hien mot dong trong ComboBox, ke ca ngay do co ca INC va Synthetic FIRST.
+- `RecoverySnapshotBuilder.cs` chon FIRST moi nhat tai/truc ngay user chon, sau do replay cac INC phat sinh sau FIRST den ngay do. Synthetic FIRST cung ngay duoc xem la moc da gom INC truoc no.
+- `BackupManifestStreamReader` doc JSON theo buffer va tung entry; khong deserialize toan bo manifest lon vao RAM.
+- Snapshot duoc index vao DB rieng `RecoverySnapshot.db` qua `RecoverySnapshotRepository.cs`. Build dung transaction; neu loi/mat dien thi khong de lai snapshot nua voi.
+- Signature dua tren ten/size/last-write cua cac manifest giup mo lai cung ngay nhanh, chi rebuild khi chain manifest thay doi.
+
+### 15.3 Giao dien va lua chon
+
+- `TvBackupFile` la cay ao/lazy-load tu SQLite, co checkbox folder. Root hien theo o dia (`D:\`, ...).
+- Click folder se nap file truc tiep trong folder do vao `lvBackupFiles`, gom ten, size, extension va last modified; ListView co checkbox chon file rieng.
+- Tick folder dai dien cho toan bo file con, ke ca cac node chua expand. Lua chon folder/file duoc dua vao bang staging theo RunID de query theo batch, khong tao danh sach khong lo trong RAM.
+- `btnbrowsepathbk` chon thu muc dich tren AgentControl va ghi vao `txtpathsavebk`.
+- Chan chon thu muc dich nam ben trong `ControlStoragePath` de khong ghi de/lam ban cac ban backup goc.
+
+### 15.4 Trich xuat va an toan
+
+- `RecoveryFileExtractor.cs` doc danh sach da chon theo batch 500 file, copy buffer 1 MB va cap nhat `pcbbackup` theo tong byte.
+- Giu cau truc o dia trong thu muc dich, vi du `D:\Data\a.txt` thanh `{ThuMucDich}\D\Data\a.txt`.
+- Moi file ghi vao `{ten}.restoring`; sidecar `.restoring.meta` luu source session, relative path, size va last modified. Chi resume neu metadata trung khop, tranh noi nham partial cua ngay/session khac.
+- Nhan du moi set last-write va atomically doi `.restoring` thanh ten that. Neu file dich ton tai, user duoc hoi xac nhan mot lan va file se bi ghi de sau khi ban tam hoan chinh.
+- Neu dong form khi dang copy, form hoi xac nhan, cancel an toan va giu `.restoring` de tiep tuc lan sau.
+- Khi dang chay ProgressBar dung trang thai mac dinh; hoan tat dat 100%, doi sang trang thai paused mau vang/cam cua Windows va hien tong file thanh cong/loi.
+
+### 15.5 Test da chay
+
+- Integration FIRST + INC: file tao moi, sua, xoa duoc replay dung; file sua tro dung ve folder INC, file xoa khong con trong snapshot.
+- Chon folder bang SQL staging, thong ke file/byte va trich xuat noi dung/cau truc dung.
+- Cache cung ngay va resume file partial da test thanh cong.
+- Manifest FIRST 100.000 entry duoc ghi streaming, parser/index doc du 100.000 file ma khong deserialize ca manifest.
+- Manifest co `..\evil.txt` bi tu choi va transaction build rollback.
+- Resume metadata dung tiep tuc dung offset; metadata khac session bi reset thay vi ghep nham du lieu.
+
+## 16. Nap cau hinh backup rieng khi chon Agent - 2026-08-25
+
+- Moi lan `ListboxAgents` doi lua chon, module Backup lay `AgentID` truc tiep tu item dang chon va doc cau hinh tu bang `BackupConfigs` trong `BackupManagement.db`.
+- UI xoa ngay cau hinh cua Agent truoc trong luc doc DB, tranh hien hoac vo tinh deploy nham cau hinh cua may khac.
+- Moi luot nap co version rieng; neu user doi Agent nhanh, ket qua DB cua Agent cu ve tre se bi bo qua.
+- Cau hinh duoc nap lai gom: duong dan luu tren Control, chu ky INC, chu ky Full, gio backup, thu muc loai tru, extension/pattern loai tru va cac checkbox nguon backup tren `tvRemoteFolders`.
+- Agent chua co cau hinh se ve mac dinh: duong dan rong, Full 60 ngay, backup moi 1 ngay, gio `00:00`, khong tick nguon, exclude folder rong va cac pattern mac dinh `.tmp`, `.temp`, `~*`, `~$*`.
+- Da test runtime voi hai Agent co cau hinh khac nhau: nap dung tung Agent, cap nhat Agent A khong anh huong Agent B, Agent chua cau hinh tra ve `null` de UI dung mac dinh.

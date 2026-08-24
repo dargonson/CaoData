@@ -20,6 +20,7 @@ namespace AgentControl
         private readonly HashSet<string> _configuredBackupSourcePaths =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private bool _applyingBackupTreeChecks;
+        private int _backupConfigLoadVersion;
 
         private void InitializeBackupModule()
         {
@@ -38,35 +39,45 @@ namespace AgentControl
 
         private async void BackupAgentSelectionChanged(object? sender, EventArgs e)
         {
-            if (string.IsNullOrWhiteSpace(selectedAgentId))
+            int loadVersion = ++_backupConfigLoadVersion;
+            string agentId = GetSelectedBackupAgentId();
+
+            // Xoa ngay cau hinh cua Agent truoc de UI khong hien/ghi nham trong luc doc DB.
+            ClearBackupEditor();
+            if (string.IsNullOrWhiteSpace(agentId))
             {
-                ClearBackupEditor();
                 return;
             }
 
-            await LoadBackupConfigIntoEditorAsync(selectedAgentId);
+            try
+            {
+                await LoadBackupConfigIntoEditorAsync(agentId, loadVersion);
+            }
+            catch (Exception ex)
+            {
+                if (loadVersion == _backupConfigLoadVersion &&
+                    string.Equals(agentId, GetSelectedBackupAgentId(), StringComparison.OrdinalIgnoreCase))
+                {
+                    MessageBox.Show(
+                        "Không thể nạp cấu hình backup của Agent: " + ex.Message,
+                        "Backup",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                }
+            }
         }
 
-        private async Task LoadBackupConfigIntoEditorAsync(string agentId)
+        private async Task LoadBackupConfigIntoEditorAsync(string agentId, int loadVersion)
         {
             BackupConfiguration? config = await BackupRepository.GetConfigAsync(agentId);
-            if (!string.Equals(agentId, selectedAgentId, StringComparison.OrdinalIgnoreCase))
+            if (loadVersion != _backupConfigLoadVersion ||
+                !string.Equals(agentId, GetSelectedBackupAgentId(), StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
-
-            _configuredBackupSourcePaths.Clear();
-            ClearTreeChecks(tvRemoteFolders.Nodes);
 
             if (config == null)
             {
-                textBox1.Clear();
-                numericUpDown1.Value = 60;
-                numericUpDown2.Value = 1;
-                dateTimePicker1.Value = DateTime.Today;
-                listBox1.Items.Clear();
-                listBox2.Items.Clear();
-                AddDefaultBackupPatterns();
                 return;
             }
 
@@ -86,6 +97,31 @@ namespace AgentControl
             }
 
             ApplyConfiguredBackupChecks(tvRemoteFolders.Nodes);
+        }
+
+        private string GetSelectedBackupAgentId()
+        {
+            if (ListboxAgents.SelectedItem is NHFUiControls.AgentInfo agent)
+            {
+                return agent.AgentID?.Trim() ?? string.Empty;
+            }
+
+            object? selectedItem = ListboxAgents.SelectedItem;
+            if (selectedItem == null)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                return selectedItem.GetType().GetProperty("AgentID")?.GetValue(selectedItem)?.ToString()?.Trim()
+                    ?? selectedItem.ToString()?.Trim()
+                    ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
 
         private void BackupBrowseStorage_Click(object? sender, EventArgs e)
@@ -403,6 +439,9 @@ namespace AgentControl
         private void ClearBackupEditor()
         {
             textBox1.Clear();
+            numericUpDown1.Value = ClampNumericValue(numericUpDown1, 60);
+            numericUpDown2.Value = ClampNumericValue(numericUpDown2, 1);
+            dateTimePicker1.Value = DateTime.Today;
             listBox1.Items.Clear();
             listBox2.Items.Clear();
             _configuredBackupSourcePaths.Clear();

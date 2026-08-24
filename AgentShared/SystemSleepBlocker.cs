@@ -109,14 +109,14 @@ namespace AgentShared
             SystemRequired = 0
         }
 
-        [DllImport("PowrProf.dll", SetLastError = true)]
+        [DllImport("Kernel32.dll", SetLastError = true, ExactSpelling = true)]
         private static extern SafeFileHandle PowerCreateRequest(ref ReasonContext context);
 
-        [DllImport("PowrProf.dll", SetLastError = true)]
+        [DllImport("Kernel32.dll", SetLastError = true, ExactSpelling = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool PowerSetRequest(SafeFileHandle powerRequest, PowerRequestType requestType);
 
-        [DllImport("PowrProf.dll", SetLastError = true)]
+        [DllImport("Kernel32.dll", SetLastError = true, ExactSpelling = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool PowerClearRequest(SafeFileHandle powerRequest, PowerRequestType requestType);
     }

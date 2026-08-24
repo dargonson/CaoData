@@ -56,6 +56,7 @@ namespace AgentControl
             lvRemoteFiles.View = View.Details;// Đảm bảo ListView hiển thị dạng bảng và có cột lúc chạy
             InitializeBackupModule();
             InitializeTrayModule();
+            InitializeRecoveryModule();
         }
 
         private ImageList shellImages = new ImageList();
