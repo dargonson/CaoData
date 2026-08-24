@@ -29,6 +29,7 @@
         private void InitializeComponent()
         {
             components = new System.ComponentModel.Container();
+            DataGridViewCellStyle dataGridViewCellStyle1 = new DataGridViewCellStyle();
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(frmToolBackup));
             groupBox1 = new GroupBox();
             radlistdown = new RadioButton();
@@ -59,7 +60,6 @@
             panel1 = new Panel();
             panel2 = new Panel();
             PanelHeader = new Panel();
-            pictureBox1 = new PictureBox();
             groupBox4 = new GroupBox();
             btndeleteconfigBK = new Button();
             btnrecovery = new Button();
@@ -90,7 +90,11 @@
             dashboardAgent = new DataGridViewTextBoxColumn();
             dashboardAgentName = new DataGridViewTextBoxColumn();
             dashboardOS = new DataGridViewTextBoxColumn();
+            dashboardOnlineStatus = new DataGridViewTextBoxColumn();
+            dashboardSourcePaths = new DataGridViewTextBoxColumn();
             dashboardStoragePath = new DataGridViewTextBoxColumn();
+            dashboardExcludedFolders = new DataGridViewTextBoxColumn();
+            dashboardExcludedPatterns = new DataGridViewTextBoxColumn();
             dashboardFullBackupDays = new DataGridViewTextBoxColumn();
             dashboardBackupTime = new DataGridViewTextBoxColumn();
             dashboardBackupIntervalDays = new DataGridViewTextBoxColumn();
@@ -99,6 +103,7 @@
             dashboardSpeed = new DataGridViewTextBoxColumn();
             dashboardStartedAt = new DataGridViewTextBoxColumn();
             dashboardStatus = new DataGridViewTextBoxColumn();
+            pictureBox1 = new PictureBox();
             groupBox1.SuspendLayout();
             grbchecksum.SuspendLayout();
             panelZone1.SuspendLayout();
@@ -108,7 +113,6 @@
             panel1.SuspendLayout();
             panel2.SuspendLayout();
             PanelHeader.SuspendLayout();
-            ((System.ComponentModel.ISupportInitialize)pictureBox1).BeginInit();
             groupBox4.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)numericUpDown1).BeginInit();
             ((System.ComponentModel.ISupportInitialize)numericUpDown2).BeginInit();
@@ -116,6 +120,7 @@
             groupBox2.SuspendLayout();
             panel3.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)dgvDashboard).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)pictureBox1).BeginInit();
             SuspendLayout();
             // 
             // groupBox1
@@ -165,18 +170,18 @@
             // lblver
             // 
             lblver.AutoSize = true;
-            lblver.Enabled = false;
-            lblver.Location = new Point(23, 133);
+            lblver.Font = new Font("Segoe UI", 12F, FontStyle.Bold | FontStyle.Italic);
+            lblver.ForeColor = Color.FromArgb(255, 128, 0);
+            lblver.Location = new Point(1298, 135);
             lblver.Name = "lblver";
-            lblver.Size = new Size(38, 15);
+            lblver.Size = new Size(55, 21);
             lblver.TabIndex = 6;
             lblver.Text = "label1";
-            lblver.Visible = false;
             // 
             // txtxoa
             // 
             txtxoa.Font = new Font("Segoe UI", 15F);
-            txtxoa.Location = new Point(15, 41);
+            txtxoa.Location = new Point(15, 22);
             txtxoa.Name = "txtxoa";
             txtxoa.Size = new Size(83, 34);
             txtxoa.TabIndex = 5;
@@ -242,7 +247,7 @@
             btnKetNoi.AllowDrop = true;
             btnKetNoi.Font = new Font("Segoe UI", 20F, FontStyle.Bold);
             btnKetNoi.ForeColor = Color.Red;
-            btnKetNoi.Location = new Point(752, 114);
+            btnKetNoi.Location = new Point(605, 114);
             btnKetNoi.Name = "btnKetNoi";
             btnKetNoi.Size = new Size(417, 56);
             btnKetNoi.TabIndex = 2;
@@ -262,7 +267,7 @@
             // 
             // brndel
             // 
-            brndel.Location = new Point(15, 98);
+            brndel.Location = new Point(15, 65);
             brndel.Name = "brndel";
             brndel.Size = new Size(83, 34);
             brndel.TabIndex = 0;
@@ -328,7 +333,7 @@
             dvgUploads.Dock = DockStyle.Fill;
             dvgUploads.Location = new Point(0, 0);
             dvgUploads.Name = "dvgUploads";
-            dvgUploads.Size = new Size(719, 490);
+            dvgUploads.Size = new Size(800, 490);
             dvgUploads.TabIndex = 8;
             // 
             // dgvDownloads
@@ -337,7 +342,7 @@
             dgvDownloads.Dock = DockStyle.Fill;
             dgvDownloads.Location = new Point(0, 0);
             dgvDownloads.Name = "dgvDownloads";
-            dgvDownloads.Size = new Size(719, 490);
+            dgvDownloads.Size = new Size(800, 490);
             dgvDownloads.TabIndex = 4;
             // 
             // tmrUpdateUI
@@ -353,7 +358,7 @@
             lvRemoteFiles.GridLines = true;
             lvRemoteFiles.Location = new Point(0, 0);
             lvRemoteFiles.Name = "lvRemoteFiles";
-            lvRemoteFiles.Size = new Size(543, 490);
+            lvRemoteFiles.Size = new Size(519, 490);
             lvRemoteFiles.TabIndex = 3;
             lvRemoteFiles.UseCompatibleStateImageBehavior = false;
             lvRemoteFiles.View = View.Details;
@@ -368,15 +373,17 @@
             // ColSize
             // 
             ColSize.Text = "Size";
+            ColSize.Width = 70;
             // 
             // ColType
             // 
             ColType.Text = "Type";
+            ColType.Width = 75;
             // 
             // ColDate
             // 
             ColDate.Text = "Date";
-            ColDate.Width = 95;
+            ColDate.Width = 120;
             // 
             // panel1
             // 
@@ -384,7 +391,7 @@
             panel1.Dock = DockStyle.Left;
             panel1.Location = new Point(585, 191);
             panel1.Name = "panel1";
-            panel1.Size = new Size(543, 490);
+            panel1.Size = new Size(519, 490);
             panel1.TabIndex = 5;
             // 
             // panel2
@@ -392,9 +399,9 @@
             panel2.Controls.Add(dvgUploads);
             panel2.Controls.Add(dgvDownloads);
             panel2.Dock = DockStyle.Fill;
-            panel2.Location = new Point(1128, 191);
+            panel2.Location = new Point(1104, 191);
             panel2.Name = "panel2";
-            panel2.Size = new Size(719, 490);
+            panel2.Size = new Size(800, 490);
             panel2.TabIndex = 6;
             // 
             // PanelHeader
@@ -408,18 +415,8 @@
             PanelHeader.Dock = DockStyle.Top;
             PanelHeader.Location = new Point(0, 0);
             PanelHeader.Name = "PanelHeader";
-            PanelHeader.Size = new Size(1847, 191);
+            PanelHeader.Size = new Size(1904, 191);
             PanelHeader.TabIndex = 9;
-            // 
-            // pictureBox1
-            // 
-            pictureBox1.Image = Properties.Resources.LOGO;
-            pictureBox1.Location = new Point(5, 16);
-            pictureBox1.Name = "pictureBox1";
-            pictureBox1.Size = new Size(71, 107);
-            pictureBox1.SizeMode = PictureBoxSizeMode.Zoom;
-            pictureBox1.TabIndex = 18;
-            pictureBox1.TabStop = false;
             // 
             // groupBox4
             // 
@@ -446,9 +443,9 @@
             groupBox4.Controls.Add(numericUpDown2);
             groupBox4.Controls.Add(label3);
             groupBox4.Font = new Font("Segoe UI", 9F);
-            groupBox4.Location = new Point(82, 3);
+            groupBox4.Location = new Point(232, 3);
             groupBox4.Name = "groupBox4";
-            groupBox4.Size = new Size(1181, 185);
+            groupBox4.Size = new Size(1031, 185);
             groupBox4.TabIndex = 17;
             groupBox4.TabStop = false;
             groupBox4.Text = "Backup";
@@ -457,7 +454,7 @@
             // 
             btndeleteconfigBK.Font = new Font("Segoe UI", 10.5F, FontStyle.Bold);
             btndeleteconfigBK.ForeColor = Color.Fuchsia;
-            btndeleteconfigBK.Location = new Point(970, 51);
+            btndeleteconfigBK.Location = new Point(823, 51);
             btndeleteconfigBK.Name = "btndeleteconfigBK";
             btndeleteconfigBK.Size = new Size(100, 54);
             btndeleteconfigBK.TabIndex = 17;
@@ -468,7 +465,7 @@
             // 
             btnrecovery.Font = new Font("Segoe UI", 10.5F, FontStyle.Bold);
             btnrecovery.ForeColor = Color.Blue;
-            btnrecovery.Location = new Point(1075, 51);
+            btnrecovery.Location = new Point(928, 51);
             btnrecovery.Name = "btnrecovery";
             btnrecovery.Size = new Size(94, 54);
             btnrecovery.TabIndex = 4;
@@ -479,7 +476,7 @@
             // 
             btneditconfigBK.Font = new Font("Segoe UI", 10.5F, FontStyle.Bold);
             btneditconfigBK.ForeColor = Color.FromArgb(192, 64, 0);
-            btneditconfigBK.Location = new Point(860, 51);
+            btneditconfigBK.Location = new Point(713, 51);
             btneditconfigBK.Name = "btneditconfigBK";
             btneditconfigBK.Size = new Size(104, 54);
             btneditconfigBK.TabIndex = 4;
@@ -490,7 +487,7 @@
             // 
             btnDeploy.Font = new Font("Segoe UI", 10.5F, FontStyle.Bold);
             btnDeploy.ForeColor = Color.Green;
-            btnDeploy.Location = new Point(752, 51);
+            btnDeploy.Location = new Point(605, 51);
             btnDeploy.Name = "btnDeploy";
             btnDeploy.Size = new Size(102, 54);
             btnDeploy.TabIndex = 4;
@@ -499,18 +496,18 @@
             // 
             // btnDeleteExt
             // 
-            btnDeleteExt.Location = new Point(433, 155);
+            btnDeleteExt.Location = new Point(311, 158);
             btnDeleteExt.Name = "btnDeleteExt";
-            btnDeleteExt.Size = new Size(100, 24);
+            btnDeleteExt.Size = new Size(75, 24);
             btnDeleteExt.TabIndex = 16;
             btnDeleteExt.Text = "Xóa";
             btnDeleteExt.UseVisualStyleBackColor = true;
             // 
             // btnAddExt
             // 
-            btnAddExt.Location = new Point(313, 155);
+            btnAddExt.Location = new Point(227, 158);
             btnAddExt.Name = "btnAddExt";
-            btnAddExt.Size = new Size(100, 24);
+            btnAddExt.Size = new Size(75, 24);
             btnAddExt.TabIndex = 15;
             btnAddExt.Text = "Thêm";
             btnAddExt.UseVisualStyleBackColor = true;
@@ -519,15 +516,15 @@
             // 
             listBox2.FormattingEnabled = true;
             listBox2.ItemHeight = 15;
-            listBox2.Location = new Point(293, 29);
+            listBox2.Location = new Point(217, 29);
             listBox2.Name = "listBox2";
-            listBox2.Size = new Size(255, 124);
+            listBox2.Size = new Size(184, 124);
             listBox2.TabIndex = 14;
             // 
             // label6
             // 
             label6.AutoSize = true;
-            label6.Location = new Point(355, 11);
+            label6.Location = new Point(237, 11);
             label6.Name = "label6";
             label6.Size = new Size(147, 15);
             label6.TabIndex = 13;
@@ -535,7 +532,7 @@
             // 
             // button1
             // 
-            button1.Location = new Point(1109, 21);
+            button1.Location = new Point(956, 22);
             button1.Name = "button1";
             button1.Size = new Size(66, 23);
             button1.TabIndex = 3;
@@ -544,23 +541,23 @@
             // 
             // textBox1
             // 
-            textBox1.Location = new Point(664, 22);
+            textBox1.Location = new Point(538, 22);
             textBox1.Name = "textBox1";
-            textBox1.Size = new Size(439, 23);
+            textBox1.Size = new Size(412, 23);
             textBox1.TabIndex = 4;
             // 
             // btndeleteExcFolder
             // 
-            btndeleteExcFolder.Location = new Point(146, 155);
+            btndeleteExcFolder.Location = new Point(113, 155);
             btndeleteExcFolder.Name = "btndeleteExcFolder";
-            btndeleteExcFolder.Size = new Size(100, 24);
+            btndeleteExcFolder.Size = new Size(75, 24);
             btndeleteExcFolder.TabIndex = 12;
             btndeleteExcFolder.Text = "Xóa";
             btndeleteExcFolder.UseVisualStyleBackColor = true;
             // 
             // label1
             // 
-            label1.Location = new Point(570, 13);
+            label1.Location = new Point(444, 17);
             label1.Name = "label1";
             label1.Size = new Size(88, 41);
             label1.TabIndex = 2;
@@ -568,9 +565,9 @@
             // 
             // btnAddExcFolder
             // 
-            btnAddExcFolder.Location = new Point(9, 155);
+            btnAddExcFolder.Location = new Point(26, 155);
             btnAddExcFolder.Name = "btnAddExcFolder";
-            btnAddExcFolder.Size = new Size(100, 24);
+            btnAddExcFolder.Size = new Size(81, 24);
             btnAddExcFolder.TabIndex = 11;
             btnAddExcFolder.Text = "Thêm";
             btnAddExcFolder.UseVisualStyleBackColor = true;
@@ -579,15 +576,15 @@
             // 
             listBox1.FormattingEnabled = true;
             listBox1.ItemHeight = 15;
-            listBox1.Location = new Point(9, 29);
+            listBox1.Location = new Point(18, 29);
             listBox1.Name = "listBox1";
-            listBox1.Size = new Size(255, 124);
+            listBox1.Size = new Size(184, 124);
             listBox1.TabIndex = 10;
             // 
             // label5
             // 
             label5.AutoSize = true;
-            label5.Location = new Point(85, 11);
+            label5.Location = new Point(62, 11);
             label5.Name = "label5";
             label5.Size = new Size(94, 15);
             label5.TabIndex = 9;
@@ -595,7 +592,7 @@
             // 
             // numericUpDown1
             // 
-            numericUpDown1.Location = new Point(691, 72);
+            numericUpDown1.Location = new Point(544, 52);
             numericUpDown1.Maximum = new decimal(new int[] { 3650, 0, 0, 0 });
             numericUpDown1.Minimum = new decimal(new int[] { 1, 0, 0, 0 });
             numericUpDown1.Name = "numericUpDown1";
@@ -608,7 +605,7 @@
             // 
             dateTimePicker1.CustomFormat = "HH:mm";
             dateTimePicker1.Format = DateTimePickerFormat.Custom;
-            dateTimePicker1.Location = new Point(692, 101);
+            dateTimePicker1.Location = new Point(545, 81);
             dateTimePicker1.Name = "dateTimePicker1";
             dateTimePicker1.ShowUpDown = true;
             dateTimePicker1.Size = new Size(54, 23);
@@ -617,7 +614,7 @@
             // label2
             // 
             label2.AutoSize = true;
-            label2.Location = new Point(554, 76);
+            label2.Location = new Point(407, 56);
             label2.Name = "label2";
             label2.Size = new Size(131, 15);
             label2.TabIndex = 2;
@@ -626,7 +623,7 @@
             // label4
             // 
             label4.AutoSize = true;
-            label4.Location = new Point(554, 106);
+            label4.Location = new Point(407, 86);
             label4.Name = "label4";
             label4.Size = new Size(98, 15);
             label4.TabIndex = 7;
@@ -634,7 +631,7 @@
             // 
             // numericUpDown2
             // 
-            numericUpDown2.Location = new Point(692, 130);
+            numericUpDown2.Location = new Point(545, 110);
             numericUpDown2.Maximum = new decimal(new int[] { 365, 0, 0, 0 });
             numericUpDown2.Minimum = new decimal(new int[] { 1, 0, 0, 0 });
             numericUpDown2.Name = "numericUpDown2";
@@ -646,7 +643,7 @@
             // label3
             // 
             label3.AutoSize = true;
-            label3.Location = new Point(554, 132);
+            label3.Location = new Point(407, 112);
             label3.Name = "label3";
             label3.Size = new Size(107, 15);
             label3.TabIndex = 5;
@@ -658,7 +655,7 @@
             groupBox3.Controls.Add(txtxoa);
             groupBox3.Location = new Point(1269, 3);
             groupBox3.Name = "groupBox3";
-            groupBox3.Size = new Size(112, 159);
+            groupBox3.Size = new Size(112, 105);
             groupBox3.TabIndex = 10;
             groupBox3.TabStop = false;
             groupBox3.Text = "Delete File";
@@ -683,7 +680,7 @@
             panel3.Dock = DockStyle.Bottom;
             panel3.Location = new Point(0, 681);
             panel3.Name = "panel3";
-            panel3.Size = new Size(1847, 178);
+            panel3.Size = new Size(1904, 178);
             panel3.TabIndex = 19;
             // 
             // dgvDashboard
@@ -691,8 +688,16 @@
             dgvDashboard.AllowUserToAddRows = false;
             dgvDashboard.AllowUserToDeleteRows = false;
             dgvDashboard.AllowUserToResizeRows = false;
+            dataGridViewCellStyle1.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            dataGridViewCellStyle1.BackColor = SystemColors.Control;
+            dataGridViewCellStyle1.Font = new Font("Segoe UI", 9F);
+            dataGridViewCellStyle1.ForeColor = SystemColors.WindowText;
+            dataGridViewCellStyle1.SelectionBackColor = SystemColors.Highlight;
+            dataGridViewCellStyle1.SelectionForeColor = SystemColors.HighlightText;
+            dataGridViewCellStyle1.WrapMode = DataGridViewTriState.True;
+            dgvDashboard.ColumnHeadersDefaultCellStyle = dataGridViewCellStyle1;
             dgvDashboard.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
-            dgvDashboard.Columns.AddRange(new DataGridViewColumn[] { dashboardAgent, dashboardAgentName, dashboardOS, dashboardStoragePath, dashboardFullBackupDays, dashboardBackupTime, dashboardBackupIntervalDays, dashboardProgress, dashboardCurrentFile, dashboardSpeed, dashboardStartedAt, dashboardStatus });
+            dgvDashboard.Columns.AddRange(new DataGridViewColumn[] { dashboardAgent, dashboardAgentName, dashboardOS, dashboardOnlineStatus, dashboardSourcePaths, dashboardStoragePath, dashboardExcludedFolders, dashboardExcludedPatterns, dashboardFullBackupDays, dashboardBackupTime, dashboardBackupIntervalDays, dashboardProgress, dashboardCurrentFile, dashboardSpeed, dashboardStartedAt, dashboardStatus });
             dgvDashboard.Dock = DockStyle.Fill;
             dgvDashboard.Location = new Point(0, 0);
             dgvDashboard.MultiSelect = false;
@@ -700,105 +705,155 @@
             dgvDashboard.ReadOnly = true;
             dgvDashboard.RowHeadersVisible = false;
             dgvDashboard.RowTemplate.Height = 30;
-            dgvDashboard.ScrollBars = ScrollBars.Vertical;
             dgvDashboard.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-            dgvDashboard.Size = new Size(1847, 178);
+            dgvDashboard.Size = new Size(1904, 178);
             dgvDashboard.TabIndex = 0;
             // 
             // dashboardAgent
             // 
-            dashboardAgent.HeaderText = "Agent";
+            dashboardAgent.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            dashboardAgent.HeaderText = "Tên máy tính";
             dashboardAgent.Name = "dashboardAgent";
             dashboardAgent.ReadOnly = true;
-            dashboardAgent.Width = 125;
+            dashboardAgent.Width = 79;
             // 
             // dashboardAgentName
             // 
-            dashboardAgentName.HeaderText = "AgentName";
+            dashboardAgentName.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            dashboardAgentName.HeaderText = "Người sử dụng";
             dashboardAgentName.Name = "dashboardAgentName";
             dashboardAgentName.ReadOnly = true;
-            dashboardAgentName.Width = 125;
+            dashboardAgentName.Width = 133;
             // 
             // dashboardOS
             // 
+            dashboardOS.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
             dashboardOS.HeaderText = "OS";
             dashboardOS.Name = "dashboardOS";
             dashboardOS.ReadOnly = true;
-            dashboardOS.Width = 95;
+            dashboardOS.Width = 75;
+            // 
+            // dashboardOnlineStatus
+            // 
+            dashboardOnlineStatus.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            dashboardOnlineStatus.HeaderText = "Online Status";
+            dashboardOnlineStatus.Name = "dashboardOnlineStatus";
+            dashboardOnlineStatus.ReadOnly = true;
+            dashboardOnlineStatus.Width = 51;
+            // 
+            // dashboardSourcePaths
+            // 
+            dashboardSourcePaths.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            dashboardSourcePaths.HeaderText = "Thư mục backup trên Agent";
+            dashboardSourcePaths.Name = "dashboardSourcePaths";
+            dashboardSourcePaths.ReadOnly = true;
+            dashboardSourcePaths.Width = 125;
             // 
             // dashboardStoragePath
             // 
-            dashboardStoragePath.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+            dashboardStoragePath.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
             dashboardStoragePath.FillWeight = 45F;
             dashboardStoragePath.HeaderText = "Đường dẫn lưu file backup";
-            dashboardStoragePath.MinimumWidth = 180;
             dashboardStoragePath.Name = "dashboardStoragePath";
             dashboardStoragePath.ReadOnly = true;
+            dashboardStoragePath.Width = 125;
+            // 
+            // dashboardExcludedFolders
+            // 
+            dashboardExcludedFolders.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            dashboardExcludedFolders.HeaderText = "Thư mục loại trừ";
+            dashboardExcludedFolders.Name = "dashboardExcludedFolders";
+            dashboardExcludedFolders.ReadOnly = true;
+            dashboardExcludedFolders.Width = 110;
+            // 
+            // dashboardExcludedPatterns
+            // 
+            dashboardExcludedPatterns.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            dashboardExcludedPatterns.HeaderText = "Extension / pattern loại trừ";
+            dashboardExcludedPatterns.Name = "dashboardExcludedPatterns";
+            dashboardExcludedPatterns.ReadOnly = true;
+            dashboardExcludedPatterns.Width = 110;
             // 
             // dashboardFullBackupDays
             // 
+            dashboardFullBackupDays.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
             dashboardFullBackupDays.HeaderText = "Số ngày tạo Full Backup";
             dashboardFullBackupDays.Name = "dashboardFullBackupDays";
             dashboardFullBackupDays.ReadOnly = true;
-            dashboardFullBackupDays.Width = 115;
+            dashboardFullBackupDays.Width = 92;
             // 
             // dashboardBackupTime
             // 
+            dashboardBackupTime.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
             dashboardBackupTime.HeaderText = "Thời gian backup";
             dashboardBackupTime.Name = "dashboardBackupTime";
             dashboardBackupTime.ReadOnly = true;
-            dashboardBackupTime.Width = 105;
+            dashboardBackupTime.Width = 83;
             // 
             // dashboardBackupIntervalDays
             // 
+            dashboardBackupIntervalDays.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
             dashboardBackupIntervalDays.HeaderText = "Backup mỗi (ngày)";
             dashboardBackupIntervalDays.Name = "dashboardBackupIntervalDays";
             dashboardBackupIntervalDays.ReadOnly = true;
-            dashboardBackupIntervalDays.Width = 110;
+            dashboardBackupIntervalDays.Width = 88;
             // 
             // dashboardProgress
             // 
+            dashboardProgress.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
             dashboardProgress.HeaderText = "Tiến độ";
             dashboardProgress.Name = "dashboardProgress";
             dashboardProgress.ReadOnly = true;
             dashboardProgress.Resizable = DataGridViewTriState.True;
-            dashboardProgress.Width = 175;
             // 
             // dashboardCurrentFile
             // 
-            dashboardCurrentFile.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+            dashboardCurrentFile.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
             dashboardCurrentFile.FillWeight = 55F;
             dashboardCurrentFile.HeaderText = "File hiện tại";
-            dashboardCurrentFile.MinimumWidth = 220;
             dashboardCurrentFile.Name = "dashboardCurrentFile";
             dashboardCurrentFile.ReadOnly = true;
+            dashboardCurrentFile.Width = 170;
             // 
             // dashboardSpeed
             // 
+            dashboardSpeed.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
             dashboardSpeed.HeaderText = "Tốc độ";
             dashboardSpeed.Name = "dashboardSpeed";
             dashboardSpeed.ReadOnly = true;
-            dashboardSpeed.Width = 90;
+            dashboardSpeed.Width = 76;
             // 
             // dashboardStartedAt
             // 
+            dashboardStartedAt.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
             dashboardStartedAt.HeaderText = "Bắt đầu";
             dashboardStartedAt.Name = "dashboardStartedAt";
             dashboardStartedAt.ReadOnly = true;
-            dashboardStartedAt.Width = 135;
+            dashboardStartedAt.Width = 88;
             // 
             // dashboardStatus
             // 
+            dashboardStatus.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
             dashboardStatus.HeaderText = "Trạng thái";
             dashboardStatus.Name = "dashboardStatus";
             dashboardStatus.ReadOnly = true;
-            dashboardStatus.Width = 190;
+            dashboardStatus.Width = 171;
+            // 
+            // pictureBox1
+            // 
+            pictureBox1.Image = Properties.Resources.Ncrow_Mega_Pack_1_Yahoo_Messenger_256;
+            pictureBox1.Location = new Point(12, 10);
+            pictureBox1.Name = "pictureBox1";
+            pictureBox1.Size = new Size(221, 172);
+            pictureBox1.SizeMode = PictureBoxSizeMode.Zoom;
+            pictureBox1.TabIndex = 18;
+            pictureBox1.TabStop = false;
             // 
             // frmToolBackup
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(1847, 859);
+            ClientSize = new Size(1904, 859);
             Controls.Add(panel2);
             Controls.Add(panel1);
             Controls.Add(panelZone2);
@@ -821,7 +876,6 @@
             panel2.ResumeLayout(false);
             PanelHeader.ResumeLayout(false);
             PanelHeader.PerformLayout();
-            ((System.ComponentModel.ISupportInitialize)pictureBox1).EndInit();
             groupBox4.ResumeLayout(false);
             groupBox4.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)numericUpDown1).EndInit();
@@ -831,6 +885,7 @@
             groupBox2.ResumeLayout(false);
             panel3.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)dgvDashboard).EndInit();
+            ((System.ComponentModel.ISupportInitialize)pictureBox1).EndInit();
             ResumeLayout(false);
             PerformLayout();
         }
@@ -890,10 +945,16 @@
         private Button btnrecovery;
         private Panel panel3;
         private DataGridView dgvDashboard;
+        private Button btneditconfigBK;
+        private Button btndeleteconfigBK;
         private DataGridViewTextBoxColumn dashboardAgent;
         private DataGridViewTextBoxColumn dashboardAgentName;
         private DataGridViewTextBoxColumn dashboardOS;
+        private DataGridViewTextBoxColumn dashboardOnlineStatus;
+        private DataGridViewTextBoxColumn dashboardSourcePaths;
         private DataGridViewTextBoxColumn dashboardStoragePath;
+        private DataGridViewTextBoxColumn dashboardExcludedFolders;
+        private DataGridViewTextBoxColumn dashboardExcludedPatterns;
         private DataGridViewTextBoxColumn dashboardFullBackupDays;
         private DataGridViewTextBoxColumn dashboardBackupTime;
         private DataGridViewTextBoxColumn dashboardBackupIntervalDays;
@@ -903,7 +964,5 @@
         private DataGridViewTextBoxColumn dashboardStartedAt;
         private DataGridViewTextBoxColumn dashboardStatus;
         private PictureBox pictureBox1;
-        private Button btneditconfigBK;
-        private Button btndeleteconfigBK;
     }
 }

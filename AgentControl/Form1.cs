@@ -936,8 +936,6 @@ namespace AgentControl
         private void InitializeControlVersionLabel()
         {
             lblver.Text = $"ver {FormatVersionForDisplay(ControlCurrentVersion)}";
-            lblver.ForeColor = Color.FromArgb(235, 126, 25);
-            lblver.Font = new Font(lblver.Font.FontFamily, Math.Max(7f, lblver.Font.Size - 1f), FontStyle.Bold);
         }
 
         protected override void WndProc(ref Message m)

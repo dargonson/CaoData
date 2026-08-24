@@ -8,11 +8,6 @@ namespace AgentControl
             new Dictionary<string, BackupDashboardAgentState>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, DataGridViewRow> _backupDashboardRows =
             new Dictionary<string, DataGridViewRow>(StringComparer.OrdinalIgnoreCase);
-        private DataGridViewTextBoxColumn _dashboardOnlineStatus = null!;
-        private DataGridViewTextBoxColumn _dashboardSourcePaths = null!;
-        private DataGridViewTextBoxColumn _dashboardExcludedFolders = null!;
-        private DataGridViewTextBoxColumn _dashboardExcludedPatterns = null!;
-
         private void InitializeBackupDashboardModule()
         {
             typeof(DataGridView)
@@ -25,10 +20,6 @@ namespace AgentControl
             dgvDashboard.ScrollBars = ScrollBars.Both;
             dgvDashboard.RowsDefaultCellStyle.SelectionBackColor = Color.FromArgb(178, 217, 245);
             dgvDashboard.RowsDefaultCellStyle.SelectionForeColor = Color.FromArgb(25, 25, 25);
-            dashboardAgent.HeaderText = "Tên máy tính";
-            dashboardAgentName.HeaderText = "Người sử dụng";
-            ConfigureResizableDashboardPathColumns();
-            AddBackupDashboardConfigurationColumns();
             dgvDashboard.CellToolTipTextNeeded += BackupDashboard_CellToolTipTextNeeded;
             dgvDashboard.SelectionChanged += BackupDashboard_SelectionChanged;
             btneditconfigBK.Enabled = false;
@@ -248,17 +239,17 @@ namespace AgentControl
             SetDashboardCell(row, dashboardAgent, state.MachineName);
             SetDashboardCell(row, dashboardAgentName, state.OwnerName);
             SetDashboardCell(row, dashboardOS, state.OsDisplay);
-            SetDashboardCell(row, _dashboardOnlineStatus, state.IsOnline ? "Online" : "Offline");
-            SetDashboardCell(row, _dashboardSourcePaths, JoinDashboardValues(config?.SourcePaths));
+            SetDashboardCell(row, dashboardOnlineStatus, state.IsOnline ? "Online" : "Offline");
+            SetDashboardCell(row, dashboardSourcePaths, JoinDashboardValues(config?.SourcePaths));
             SetDashboardCell(row, dashboardStoragePath, config?.ControlStoragePath ?? string.Empty);
             SetDashboardCell(
                 row,
-                _dashboardExcludedFolders,
+                dashboardExcludedFolders,
                 JoinDashboardValues(BackupExclusionDefaults.FolderNames.Concat(
                     config?.ExcludedFolders ?? Enumerable.Empty<string>())));
             SetDashboardCell(
                 row,
-                _dashboardExcludedPatterns,
+                dashboardExcludedPatterns,
                 JoinDashboardValues(BackupExclusionDefaults.FilePatterns.Concat(
                     config?.ExcludedPatterns ?? Enumerable.Empty<string>())));
             SetDashboardCell(row, dashboardFullBackupDays, config == null ? string.Empty : $"{config.FullBackupPeriodDays} ngày");
@@ -281,7 +272,7 @@ namespace AgentControl
                 BackupDashboardProgressMode.Waiting => Color.FromArgb(108, 117, 125),
                 _ => dgvDashboard.DefaultCellStyle.ForeColor
             };
-            DataGridViewCell onlineCell = row.Cells[_dashboardOnlineStatus.Index];
+            DataGridViewCell onlineCell = row.Cells[dashboardOnlineStatus.Index];
             onlineCell.Style.ForeColor = state.IsOnline
                 ? Color.FromArgb(25, 135, 84)
                 : Color.FromArgb(220, 53, 69);
@@ -311,21 +302,11 @@ namespace AgentControl
                 return;
             }
             if (e.ColumnIndex == dashboardStoragePath.Index ||
-                e.ColumnIndex == _dashboardSourcePaths.Index ||
-                e.ColumnIndex == _dashboardExcludedFolders.Index ||
-                e.ColumnIndex == _dashboardExcludedPatterns.Index)
+                e.ColumnIndex == dashboardSourcePaths.Index ||
+                e.ColumnIndex == dashboardExcludedFolders.Index ||
+                e.ColumnIndex == dashboardExcludedPatterns.Index)
             {
                 e.ToolTipText = dgvDashboard.Rows[e.RowIndex].Cells[e.ColumnIndex].Value?.ToString() ?? string.Empty;
-            }
-        }
-
-        private void ConfigureResizableDashboardPathColumns()
-        {
-            foreach (DataGridViewColumn column in new[] { dashboardStoragePath, dashboardCurrentFile })
-            {
-                column.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-                column.MinimumWidth = 2;
-                column.Resizable = DataGridViewTriState.True;
             }
         }
 
@@ -347,43 +328,6 @@ namespace AgentControl
             {
                 return fullPath;
             }
-        }
-
-        private void AddBackupDashboardConfigurationColumns()
-        {
-            _dashboardOnlineStatus = new DataGridViewTextBoxColumn
-            {
-                Name = "dashboardOnlineStatus",
-                HeaderText = "Online Status",
-                ReadOnly = true,
-                Width = 95
-            };
-            _dashboardExcludedFolders = new DataGridViewTextBoxColumn
-            {
-                Name = "dashboardExcludedFolders",
-                HeaderText = "Thư mục loại trừ",
-                ReadOnly = true,
-                Width = 180
-            };
-            _dashboardSourcePaths = new DataGridViewTextBoxColumn
-            {
-                Name = "dashboardSourcePaths",
-                HeaderText = "Thư mục backup trên Agent",
-                ReadOnly = true,
-                Width = 210
-            };
-            _dashboardExcludedPatterns = new DataGridViewTextBoxColumn
-            {
-                Name = "dashboardExcludedPatterns",
-                HeaderText = "Extension / pattern loại trừ",
-                ReadOnly = true,
-                Width = 190
-            };
-
-            dgvDashboard.Columns.Insert(dashboardOS.Index + 1, _dashboardOnlineStatus);
-            dgvDashboard.Columns.Insert(_dashboardOnlineStatus.Index + 1, _dashboardSourcePaths);
-            dgvDashboard.Columns.Insert(dashboardStoragePath.Index + 1, _dashboardExcludedFolders);
-            dgvDashboard.Columns.Insert(_dashboardExcludedFolders.Index + 1, _dashboardExcludedPatterns);
         }
 
         private void BackupDashboard_SelectionChanged(object? sender, EventArgs e)

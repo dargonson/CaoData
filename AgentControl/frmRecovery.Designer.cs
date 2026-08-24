@@ -37,10 +37,13 @@
             ColTypeBK = new ColumnHeader();
             ColDateBK = new ColumnHeader();
             btnSaveFileBackup = new Button();
-            pcbbackup = new ProgressBar();
+            pcbbackup = new RecoveryProgressBar();
             btnbrowsepathbk = new Button();
             txtpathsavebk = new TextBox();
             cbxlistday = new ComboBox();
+            label1 = new Label();
+            label2 = new Label();
+            label3 = new Label();
             panelZone2.SuspendLayout();
             panel1.SuspendLayout();
             SuspendLayout();
@@ -70,7 +73,7 @@
             panel1.Dock = DockStyle.Left;
             panel1.Location = new Point(294, 0);
             panel1.Name = "panel1";
-            panel1.Size = new Size(598, 641);
+            panel1.Size = new Size(504, 641);
             panel1.TabIndex = 6;
             // 
             // lvBackupFiles
@@ -78,10 +81,11 @@
             lvBackupFiles.CheckBoxes = true;
             lvBackupFiles.Columns.AddRange(new ColumnHeader[] { colNameBK, ColSizeBK, ColTypeBK, ColDateBK });
             lvBackupFiles.Dock = DockStyle.Fill;
+            lvBackupFiles.FullRowSelect = true;
             lvBackupFiles.GridLines = true;
             lvBackupFiles.Location = new Point(0, 0);
             lvBackupFiles.Name = "lvBackupFiles";
-            lvBackupFiles.Size = new Size(598, 641);
+            lvBackupFiles.Size = new Size(504, 641);
             lvBackupFiles.TabIndex = 3;
             lvBackupFiles.UseCompatibleStateImageBehavior = false;
             lvBackupFiles.View = View.Details;
@@ -94,61 +98,95 @@
             // ColSizeBK
             // 
             ColSizeBK.Text = "Size";
+            ColSizeBK.Width = 70;
             // 
             // ColTypeBK
             // 
             ColTypeBK.Text = "Type";
+            ColTypeBK.Width = 70;
             // 
             // ColDateBK
             // 
             ColDateBK.Text = "Date";
-            ColDateBK.Width = 95;
+            ColDateBK.Width = 110;
             // 
             // btnSaveFileBackup
             // 
-            btnSaveFileBackup.Location = new Point(909, 290);
+            btnSaveFileBackup.Location = new Point(991, 233);
             btnSaveFileBackup.Name = "btnSaveFileBackup";
-            btnSaveFileBackup.Size = new Size(151, 82);
+            btnSaveFileBackup.Size = new Size(118, 48);
             btnSaveFileBackup.TabIndex = 8;
-            btnSaveFileBackup.Text = "Lưu";
+            btnSaveFileBackup.Text = "Bắt đầu khôi phục";
             btnSaveFileBackup.UseVisualStyleBackColor = true;
             // 
             // pcbbackup
             // 
-            pcbbackup.Location = new Point(909, 252);
+            pcbbackup.BackColor = SystemColors.Window;
+            pcbbackup.ForeColor = SystemColors.ControlText;
+            pcbbackup.Location = new Point(944, 179);
             pcbbackup.Name = "pcbbackup";
-            pcbbackup.Size = new Size(356, 23);
+            pcbbackup.Size = new Size(249, 23);
             pcbbackup.TabIndex = 9;
             // 
             // btnbrowsepathbk
             // 
-            btnbrowsepathbk.Location = new Point(917, 437);
+            btnbrowsepathbk.Location = new Point(1199, 145);
             btnbrowsepathbk.Name = "btnbrowsepathbk";
-            btnbrowsepathbk.Size = new Size(75, 23);
+            btnbrowsepathbk.Size = new Size(66, 23);
             btnbrowsepathbk.TabIndex = 10;
-            btnbrowsepathbk.Text = "button1";
+            btnbrowsepathbk.Text = "Browse";
             btnbrowsepathbk.UseVisualStyleBackColor = true;
             // 
             // txtpathsavebk
             // 
-            txtpathsavebk.Location = new Point(917, 388);
+            txtpathsavebk.Location = new Point(944, 146);
             txtpathsavebk.Name = "txtpathsavebk";
-            txtpathsavebk.Size = new Size(324, 23);
+            txtpathsavebk.Size = new Size(249, 23);
             txtpathsavebk.TabIndex = 11;
             // 
             // cbxlistday
             // 
             cbxlistday.FormattingEnabled = true;
-            cbxlistday.Location = new Point(909, 185);
+            cbxlistday.Location = new Point(944, 108);
             cbxlistday.Name = "cbxlistday";
-            cbxlistday.Size = new Size(309, 23);
+            cbxlistday.Size = new Size(249, 23);
             cbxlistday.TabIndex = 12;
+            // 
+            // label1
+            // 
+            label1.AutoSize = true;
+            label1.Location = new Point(817, 111);
+            label1.Name = "label1";
+            label1.Size = new Size(121, 15);
+            label1.TabIndex = 13;
+            label1.Text = "Chọn ngày khôi phục";
+            // 
+            // label2
+            // 
+            label2.AutoSize = true;
+            label2.Location = new Point(817, 149);
+            label2.Name = "label2";
+            label2.Size = new Size(76, 15);
+            label2.TabIndex = 13;
+            label2.Text = "Chọn nơi lưu";
+            // 
+            // label3
+            // 
+            label3.AutoSize = true;
+            label3.Location = new Point(817, 183);
+            label3.Name = "label3";
+            label3.Size = new Size(113, 15);
+            label3.TabIndex = 13;
+            label3.Text = "Tiến trình khôi phục";
             // 
             // frmRecovery
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(1277, 641);
+            Controls.Add(label3);
+            Controls.Add(label2);
+            Controls.Add(label1);
             Controls.Add(cbxlistday);
             Controls.Add(txtpathsavebk);
             Controls.Add(btnbrowsepathbk);
@@ -175,9 +213,12 @@
         private ColumnHeader ColTypeBK;
         private ColumnHeader ColDateBK;
         private Button btnSaveFileBackup;
-        private ProgressBar pcbbackup;
+        private RecoveryProgressBar pcbbackup;
         private Button btnbrowsepathbk;
         private TextBox txtpathsavebk;
         private ComboBox cbxlistday;
+        private Label label1;
+        private Label label2;
+        private Label label3;
     }
 }

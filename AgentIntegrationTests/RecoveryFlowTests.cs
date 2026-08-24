@@ -8,6 +8,133 @@ namespace AgentIntegrationTests;
 public sealed class RecoveryFlowTests
 {
     [Fact]
+    public void RecoveryBrowser_RuntimeUiSharesShellImagesAndMatchesMainBrowserSizing()
+    {
+        Exception? failure = null;
+        using ManualResetEventSlim completed = new(false);
+        Thread thread = new(() =>
+        {
+            try
+            {
+                object form = Activator.CreateInstance(typeof(frmRecovery), "UI-SMOKE")!;
+                try
+                {
+                    object tree = GetPrivateField(form, "TvBackupFile");
+                    object list = GetPrivateField(form, "lvBackupFiles");
+                    RecoveryProgressBar progress = Assert.IsType<RecoveryProgressBar>(
+                        GetPrivateField(form, "pcbbackup"));
+                    object? treeImages = tree.GetType().GetProperty("ImageList")!.GetValue(tree);
+                    object? listImages = list.GetType().GetProperty("SmallImageList")!.GetValue(list);
+
+                    Assert.NotNull(treeImages);
+                    Assert.Same(treeImages, listImages);
+                    Assert.Equal(24, tree.GetType().GetProperty("ItemHeight")!.GetValue(tree));
+                    Assert.Equal(true, list.GetType().GetProperty("FullRowSelect")!.GetValue(list));
+                    Assert.Equal(false, list.GetType().GetProperty("HideSelection")!.GetValue(list));
+
+                    Assert.Equal("0%", progress.DisplayText);
+                    progress.Value = 557;
+                    Assert.Equal(55, progress.Percentage);
+                    Assert.Equal("55%", progress.DisplayText);
+                    progress.Value = progress.Maximum;
+                    Assert.Equal("100%", progress.DisplayText);
+                    progress.DisplayState = RecoveryProgressDisplayState.Completed;
+                    Assert.Equal("Hoàn Thành", progress.DisplayText);
+                    progress.DisplayState = RecoveryProgressDisplayState.Error;
+                    Assert.Equal("100%", progress.DisplayText);
+                    using Bitmap renderedProgress = new(progress.Width, progress.Height);
+                    progress.DrawToBitmap(renderedProgress, progress.ClientRectangle);
+                    Assert.Equal(
+                        Color.FromArgb(220, 53, 69).ToArgb(),
+                        renderedProgress.GetPixel(6, 6).ToArgb());
+                }
+                finally
+                {
+                    ((IDisposable)form).Dispose();
+                }
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+            finally
+            {
+                completed.Set();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(completed.Wait(TimeSpan.FromSeconds(15)), "frmRecovery UI smoke bị treo.");
+        thread.Join();
+        Assert.Null(failure);
+    }
+
+    [Fact]
+    public async Task RecoveryBrowser_SeparatesChildFoldersFromDirectFilesAndMarksOnlyRealBranches()
+    {
+        string agentId = "AGT-TREE-" + Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+        DateTime date = new(2026, 8, 26);
+        string database = Path.Combine(TestEnvironment.CreateDirectory("recovery-tree-db"), "snapshot.db");
+        var repository = new RecoverySnapshotRepository(database);
+
+        await repository.RebuildAsync(
+            agentId,
+            date,
+            "tree-signature",
+            writer =>
+            {
+                writer.Upsert(new BackupManifestEntry
+                {
+                    SourcePath = @"M:\root.txt",
+                    RelativeStoragePath = Path.Combine("M", "root.txt"),
+                    Size = 10,
+                    LastWriteTimeUtc = DateTime.UtcNow
+                }, "FIRST-root");
+                writer.Upsert(new BackupManifestEntry
+                {
+                    SourcePath = @"M:\abc\123.txt",
+                    RelativeStoragePath = Path.Combine("M", "abc", "123.txt"),
+                    Size = 20,
+                    LastWriteTimeUtc = DateTime.UtcNow
+                }, "FIRST-root");
+                writer.Upsert(new BackupManifestEntry
+                {
+                    SourcePath = @"M:\abc\deep\456.bin",
+                    RelativeStoragePath = Path.Combine("M", "abc", "deep", "456.bin"),
+                    Size = 30,
+                    LastWriteTimeUtc = DateTime.UtcNow
+                }, "FIRST-root");
+            },
+            CancellationToken.None);
+
+        RecoveryDirectoryRecord drive = Assert.Single(
+            await repository.GetChildDirectoriesAsync(agentId, date, string.Empty));
+        Assert.Equal("M", drive.VirtualPath);
+        Assert.True(drive.HasChildren);
+        Assert.True(frmRecovery.ShouldAddRecoveryLoadingPlaceholder(drive.HasChildren));
+
+        RecoveryDirectoryRecord abc = Assert.Single(
+            await repository.GetChildDirectoriesAsync(agentId, date, "M"));
+        Assert.Equal(Path.Combine("M", "abc"), abc.VirtualPath);
+        Assert.True(abc.HasChildren);
+
+        RecoveryDirectoryRecord deep = Assert.Single(
+            await repository.GetChildDirectoriesAsync(agentId, date, Path.Combine("M", "abc")));
+        Assert.False(deep.HasChildren);
+        Assert.False(frmRecovery.ShouldAddRecoveryLoadingPlaceholder(deep.HasChildren));
+
+        RecoveryFileRecord rootFile = Assert.Single(
+            await repository.GetFilesAsync(agentId, date, "M"));
+        Assert.Equal("root.txt", rootFile.FileName);
+        RecoveryFileRecord abcFile = Assert.Single(
+            await repository.GetFilesAsync(agentId, date, Path.Combine("M", "abc")));
+        Assert.Equal("123.txt", abcFile.FileName);
+        RecoveryFileRecord deepFile = Assert.Single(
+            await repository.GetFilesAsync(agentId, date, Path.Combine("M", "abc", "deep")));
+        Assert.Equal("456.bin", deepFile.FileName);
+    }
+
+    [Fact]
     public async Task Recovery_ReplaysChain_ExtractsSelection_AndRejectsCorruption()
     {
         string agentId = "AGT-R-" + Guid.NewGuid().ToString("N")[..10].ToUpperInvariant();
@@ -166,6 +293,11 @@ public sealed class RecoveryFlowTests
             ContentSha256 = Convert.ToHexString(SHA256.HashData(content))
         };
     }
+
+    private static object GetPrivateField(object instance, string name) =>
+        instance.GetType()
+            .GetField(name, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(instance)!;
 
     private static async Task<string> WriteSessionAsync(
         string storageRoot,

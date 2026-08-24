@@ -1,17 +1,16 @@
 using AgentShared;
-using System.Runtime.InteropServices;
 
 namespace AgentControl
 {
     public partial class frmRecovery : Form
     {
-        private const int PbmSetState = 0x0410;
-        private const int ProgressNormal = 0x0001;
-        private const int ProgressPaused = 0x0003;
         private readonly string _agentId;
         private readonly RecoverySnapshotRepository _repository = new RecoverySnapshotRepository();
         private readonly RecoverySnapshotBuilder _snapshotBuilder;
         private readonly RecoveryFileExtractor _extractor;
+        private ImageList _browserImages = null!;
+        private readonly Dictionary<string, int> _browserIconCache =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, SelectedRecoveryFile> _selectedFiles =
             new Dictionary<string, SelectedRecoveryFile>(StringComparer.OrdinalIgnoreCase);
         private CancellationTokenSource? _loadCancellation;
@@ -23,6 +22,7 @@ namespace AgentControl
         private bool _suppressDateSelection;
         private bool _extracting;
         private bool _closeAfterExtractionStops;
+        private int _directorySelectionVersion;
 
         public frmRecovery(string agentId)
         {
@@ -35,6 +35,7 @@ namespace AgentControl
 
         private void ConfigureRuntimeUi()
         {
+            components ??= new System.ComponentModel.Container();
             Text = $"Khôi phục dữ liệu - {_agentId}";
             cbxlistday.DropDownStyle = ComboBoxStyle.DropDownList;
             btnbrowsepathbk.Text = "Browse";
@@ -42,6 +43,17 @@ namespace AgentControl
             pcbbackup.Minimum = 0;
             pcbbackup.Maximum = 1000;
             pcbbackup.Value = 0;
+            _browserImages = new ImageList(components)
+            {
+                ImageSize = new Size(16, 16),
+                ColorDepth = ColorDepth.Depth32Bit
+            };
+            TvBackupFile.ImageList = _browserImages;
+            TvBackupFile.Font = new Font("Segoe UI", 9F);
+            TvBackupFile.ItemHeight = 24;
+            lvBackupFiles.SmallImageList = _browserImages;
+            lvBackupFiles.FullRowSelect = true;
+            lvBackupFiles.HideSelection = false;
 
             Load += frmRecovery_Load;
             FormClosing += frmRecovery_FormClosing;
@@ -50,6 +62,7 @@ namespace AgentControl
             TvBackupFile.AfterSelect += TvBackupFile_AfterSelect;
             TvBackupFile.AfterCheck += TvBackupFile_AfterCheck;
             lvBackupFiles.ItemCheck += lvBackupFiles_ItemCheck;
+            lvBackupFiles.MouseDoubleClick += lvBackupFiles_MouseDoubleClick;
             btnbrowsepathbk.Click += btnbrowsepathbk_Click;
             btnSaveFileBackup.Click += btnSaveFileBackup_Click;
         }
@@ -111,6 +124,7 @@ namespace AgentControl
             _loadCancellation?.Cancel();
             _loadCancellation?.Dispose();
             _loadCancellation = new CancellationTokenSource();
+            ++_directorySelectionVersion;
             CancellationToken token = _loadCancellation.Token;
             try
             {
@@ -167,18 +181,23 @@ namespace AgentControl
 
         private TreeNode CreateDirectoryNode(RecoveryDirectoryRecord directory, bool inheritedChecked)
         {
-            RecoveryDirectoryNodeTag tag = new RecoveryDirectoryNodeTag(directory.VirtualPath);
+            RecoveryDirectoryNodeTag tag = new RecoveryDirectoryNodeTag(directory);
+            int iconIndex = GetRecoveryFolderIconIndex(directory.VirtualPath);
             TreeNode node = new TreeNode(directory.DisplayName)
             {
                 Tag = tag,
-                Checked = inheritedChecked
+                Checked = inheritedChecked,
+                ImageIndex = iconIndex,
+                SelectedImageIndex = iconIndex
             };
-            if (directory.HasChildren)
+            if (ShouldAddRecoveryLoadingPlaceholder(directory.HasChildren))
             {
                 node.Nodes.Add(new TreeNode("Loading...") { Tag = null });
             }
             return node;
         }
+
+        internal static bool ShouldAddRecoveryLoadingPlaceholder(bool hasChildren) => hasChildren;
 
         private async Task EnsureChildrenLoadedAsync(TreeNode node)
         {
@@ -187,8 +206,36 @@ namespace AgentControl
                 return;
             }
 
+            if (tag.LoadingTask != null)
+            {
+                await tag.LoadingTask;
+                return;
+            }
+
+            DateTime loadedDate = _loadedDate.Value;
+            tag.LoadingTask = LoadDirectoryChildrenCoreAsync(node, tag, loadedDate);
+            try
+            {
+                await tag.LoadingTask;
+            }
+            finally
+            {
+                tag.LoadingTask = null;
+            }
+        }
+
+        private async Task LoadDirectoryChildrenCoreAsync(
+            TreeNode node,
+            RecoveryDirectoryNodeTag tag,
+            DateTime loadedDate)
+        {
             List<RecoveryDirectoryRecord> directories = await _repository.GetChildDirectoriesAsync(
-                _agentId, _loadedDate.Value, tag.VirtualPath);
+                _agentId, loadedDate, tag.VirtualPath);
+            if (_loadedDate != loadedDate || node.TreeView != TvBackupFile)
+            {
+                return;
+            }
+
             _suppressTreeChecks = true;
             try
             {
@@ -221,21 +268,50 @@ namespace AgentControl
         private async void TvBackupFile_AfterSelect(object? sender, TreeViewEventArgs e)
         {
             if (_loadedDate == null || e.Node?.Tag is not RecoveryDirectoryNodeTag tag) return;
+            int selectionVersion = ++_directorySelectionVersion;
+            DateTime loadedDate = _loadedDate.Value;
             try
             {
                 await EnsureChildrenLoadedAsync(e.Node);
                 List<RecoveryFileRecord> files = await _repository.GetFilesAsync(
-                    _agentId, _loadedDate.Value, tag.VirtualPath);
+                    _agentId, loadedDate, tag.VirtualPath);
+                if (selectionVersion != _directorySelectionVersion ||
+                    _loadedDate != loadedDate ||
+                    !ReferenceEquals(TvBackupFile.SelectedNode, e.Node))
+                {
+                    return;
+                }
+
                 _suppressFileChecks = true;
                 lvBackupFiles.BeginUpdate();
                 try
                 {
                     lvBackupFiles.Items.Clear();
+                    foreach (TreeNode childNode in e.Node.Nodes)
+                    {
+                        if (childNode.Tag is not RecoveryDirectoryNodeTag)
+                        {
+                            continue;
+                        }
+
+                        ListViewItem folderItem = new ListViewItem(childNode.Text)
+                        {
+                            Tag = new RecoveryDirectoryListItemTag(childNode),
+                            ImageIndex = childNode.ImageIndex,
+                            Checked = e.Node.Checked || childNode.Checked
+                        };
+                        folderItem.SubItems.Add(string.Empty);
+                        folderItem.SubItems.Add("File Folder");
+                        folderItem.SubItems.Add(string.Empty);
+                        lvBackupFiles.Items.Add(folderItem);
+                    }
+
                     foreach (RecoveryFileRecord file in files)
                     {
                         ListViewItem item = new ListViewItem(file.FileName)
                         {
                             Tag = file,
+                            ImageIndex = GetRecoveryFileIconIndex(file.FileName),
                             Checked = e.Node.Checked || _selectedFiles.ContainsKey(file.SourcePath)
                         };
                         item.SubItems.Add(FormatSize(file.Size));
@@ -259,13 +335,20 @@ namespace AgentControl
         private void TvBackupFile_AfterCheck(object? sender, TreeViewEventArgs e)
         {
             if (_suppressTreeChecks || e.Node?.Tag is not RecoveryDirectoryNodeTag tag) return;
+            ApplyDirectoryCheck(e.Node, tag, e.Node.Checked);
+            RefreshVisibleFileChecks();
+        }
+
+        private void ApplyDirectoryCheck(TreeNode node, RecoveryDirectoryNodeTag tag, bool isChecked)
+        {
             _suppressTreeChecks = true;
             try
             {
-                SetLoadedDescendantsChecked(e.Node.Nodes, e.Node.Checked);
-                if (!e.Node.Checked)
+                node.Checked = isChecked;
+                SetLoadedDescendantsChecked(node.Nodes, isChecked);
+                if (!isChecked)
                 {
-                    TreeNode? parent = e.Node.Parent;
+                    TreeNode? parent = node.Parent;
                     while (parent != null)
                     {
                         parent.Checked = false;
@@ -278,18 +361,33 @@ namespace AgentControl
             {
                 _suppressTreeChecks = false;
             }
-            RefreshVisibleFileChecks();
         }
 
         private void lvBackupFiles_ItemCheck(object? sender, ItemCheckEventArgs e)
         {
-            if (_suppressFileChecks || e.Index < 0 || e.Index >= lvBackupFiles.Items.Count ||
-                lvBackupFiles.Items[e.Index].Tag is not RecoveryFileRecord file)
+            if (_suppressFileChecks || e.Index < 0 || e.Index >= lvBackupFiles.Items.Count)
             {
                 return;
             }
 
             bool willBeChecked = e.NewValue == CheckState.Checked;
+            if (lvBackupFiles.Items[e.Index].Tag is RecoveryDirectoryListItemTag directoryItem &&
+                directoryItem.Node.Tag is RecoveryDirectoryNodeTag directoryTag)
+            {
+                PreserveVisibleExplicitFilesBeforeUncheckingInheritedFolder(e.Index, willBeChecked);
+                ApplyDirectoryCheck(directoryItem.Node, directoryTag, willBeChecked);
+                if (IsHandleCreated)
+                {
+                    BeginInvoke(RefreshVisibleFileChecks);
+                }
+                return;
+            }
+
+            if (lvBackupFiles.Items[e.Index].Tag is not RecoveryFileRecord file)
+            {
+                return;
+            }
+
             TreeNode? currentNode = TvBackupFile.SelectedNode;
             if (!willBeChecked && currentNode?.Checked == true)
             {
@@ -326,6 +424,47 @@ namespace AgentControl
             else
             {
                 _selectedFiles.Remove(file.SourcePath);
+            }
+        }
+
+        private void PreserveVisibleExplicitFilesBeforeUncheckingInheritedFolder(
+            int changedIndex,
+            bool willBeChecked)
+        {
+            if (willBeChecked || TvBackupFile.SelectedNode?.Checked != true)
+            {
+                return;
+            }
+
+            foreach (ListViewItem item in lvBackupFiles.Items)
+            {
+                if (item.Index != changedIndex && item.Checked && item.Tag is RecoveryFileRecord file)
+                {
+                    _selectedFiles[file.SourcePath] = new SelectedRecoveryFile(
+                        file.SourcePath,
+                        file.VirtualDirectory);
+                }
+            }
+        }
+
+        private async void lvBackupFiles_MouseDoubleClick(object? sender, MouseEventArgs e)
+        {
+            ListViewItem? item = lvBackupFiles.GetItemAt(e.X, e.Y);
+            if (item?.Tag is not RecoveryDirectoryListItemTag directoryItem)
+            {
+                return;
+            }
+
+            TvBackupFile.SelectedNode = directoryItem.Node;
+            try
+            {
+                await EnsureChildrenLoadedAsync(directoryItem.Node);
+                directoryItem.Node.Expand();
+                directoryItem.Node.EnsureVisible();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Không thể mở thư mục: " + ex.Message, "Khôi phục dữ liệu");
             }
         }
 
@@ -393,7 +532,7 @@ namespace AgentControl
             _extracting = true;
             SetUiEnabled(false);
             pcbbackup.Value = 0;
-            SetProgressState(ProgressNormal);
+            pcbbackup.DisplayState = RecoveryProgressDisplayState.Normal;
             try
             {
                 await _repository.PrepareSelectionAsync(runId, folders, files);
@@ -415,7 +554,7 @@ namespace AgentControl
                     _extractCancellation.Token);
 
                 pcbbackup.Value = pcbbackup.Maximum;
-                SetProgressState(ProgressPaused);
+                pcbbackup.DisplayState = RecoveryProgressDisplayState.Completed;
                 string errorText = result.Errors.Count == 0
                     ? string.Empty
                     : Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, result.Errors.Take(10));
@@ -435,6 +574,7 @@ namespace AgentControl
             }
             catch (Exception ex)
             {
+                pcbbackup.DisplayState = RecoveryProgressDisplayState.Error;
                 MessageBox.Show("Khôi phục thất bại: " + ex.Message, "Khôi phục dữ liệu", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
@@ -562,6 +702,10 @@ namespace AgentControl
                     {
                         item.Checked = TvBackupFile.SelectedNode.Checked || _selectedFiles.ContainsKey(file.SourcePath);
                     }
+                    else if (item.Tag is RecoveryDirectoryListItemTag directoryItem)
+                    {
+                        item.Checked = TvBackupFile.SelectedNode.Checked || directoryItem.Node.Checked;
+                    }
                 }
             }
             finally
@@ -592,14 +736,6 @@ namespace AgentControl
             _loadCancellation?.Cancel();
         }
 
-        private void SetProgressState(int state)
-        {
-            if (pcbbackup.IsHandleCreated)
-            {
-                SendMessage(pcbbackup.Handle, PbmSetState, (IntPtr)state, IntPtr.Zero);
-            }
-        }
-
         private static string FormatSize(long bytes)
         {
             string[] units = { "B", "KB", "MB", "GB", "TB" };
@@ -613,17 +749,66 @@ namespace AgentControl
             return $"{value:0.##} {units[unit]}";
         }
 
-        [DllImport("user32.dll")]
-        private static extern IntPtr SendMessage(IntPtr hWnd, int message, IntPtr wParam, IntPtr lParam);
+        private int GetCachedBrowserIconIndex(string key, Func<Icon> iconFactory)
+        {
+            if (_browserIconCache.TryGetValue(key, out int index))
+            {
+                return index;
+            }
+
+            using Icon icon = iconFactory();
+            _browserImages.Images.Add((Icon)icon.Clone());
+            index = _browserImages.Images.Count - 1;
+            _browserIconCache[key] = index;
+            return index;
+        }
+
+        private int GetRecoveryFolderIconIndex(string virtualPath)
+        {
+            bool isDriveRoot = !virtualPath.Contains(Path.DirectorySeparatorChar) &&
+                               !virtualPath.Contains(Path.AltDirectorySeparatorChar) &&
+                               virtualPath.Length == 1;
+            string key = isDriveRoot ? "__recovery_drive" : "__recovery_folder";
+            string iconPath = isDriveRoot ? virtualPath + @":\" : "Folder";
+            return GetCachedBrowserIconIndex(
+                key,
+                () => ShellIcon.GetSmallIcon(iconPath, isDirectory: true));
+        }
+
+        private int GetRecoveryFileIconIndex(string fileName)
+        {
+            string extension = Path.GetExtension(fileName);
+            if (string.IsNullOrWhiteSpace(extension))
+            {
+                extension = ".file";
+            }
+
+            string key = "__recovery_file_" + extension.ToLowerInvariant();
+            return GetCachedBrowserIconIndex(
+                key,
+                () => ShellIcon.GetSmallIcon("file" + extension, isDirectory: false));
+        }
 
         private sealed class RecoveryDirectoryNodeTag
         {
             public string VirtualPath { get; }
             public bool ChildrenLoaded { get; set; }
+            public Task? LoadingTask { get; set; }
 
-            public RecoveryDirectoryNodeTag(string virtualPath)
+            public RecoveryDirectoryNodeTag(RecoveryDirectoryRecord directory)
             {
-                VirtualPath = virtualPath;
+                VirtualPath = directory.VirtualPath;
+                ChildrenLoaded = !directory.HasChildren;
+            }
+        }
+
+        private sealed class RecoveryDirectoryListItemTag
+        {
+            public TreeNode Node { get; }
+
+            public RecoveryDirectoryListItemTag(TreeNode node)
+            {
+                Node = node;
             }
         }
 
@@ -638,6 +823,7 @@ namespace AgentControl
                 VirtualDirectory = virtualDirectory;
             }
         }
+
     }
 
     internal sealed class RecoveryLoadingForm : Form

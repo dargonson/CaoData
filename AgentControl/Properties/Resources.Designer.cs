@@ -69,5 +69,15 @@ namespace AgentControl.Properties {
                 return ((System.Drawing.Bitmap)(obj));
             }
         }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
+        internal static System.Drawing.Bitmap Ncrow_Mega_Pack_1_Yahoo_Messenger_256 {
+            get {
+                object obj = ResourceManager.GetObject("Ncrow-Mega-Pack-1-Yahoo-Messenger.256", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
     }
 }
