@@ -82,6 +82,7 @@
             groupBox3 = new GroupBox();
             groupBox2 = new GroupBox();
             toolTip1 = new ToolTip(components);
+            btnrecovery = new Button();
             groupBox1.SuspendLayout();
             grbchecksum.SuspendLayout();
             panelZone1.SuspendLayout();
@@ -225,7 +226,7 @@
             btnKetNoi.ForeColor = Color.Red;
             btnKetNoi.Location = new Point(635, 104);
             btnKetNoi.Name = "btnKetNoi";
-            btnKetNoi.Size = new Size(259, 56);
+            btnKetNoi.Size = new Size(268, 56);
             btnKetNoi.TabIndex = 2;
             btnKetNoi.Text = "Kết nối Agnet";
             btnKetNoi.UseVisualStyleBackColor = true;
@@ -404,6 +405,7 @@
             // 
             // groupBox4
             // 
+            groupBox4.Controls.Add(btnrecovery);
             groupBox4.Controls.Add(btnDeploy);
             groupBox4.Controls.Add(btnKetNoi);
             groupBox4.Controls.Add(btnDeleteExt);
@@ -433,11 +435,11 @@
             // 
             // btnDeploy
             // 
-            btnDeploy.Font = new Font("Segoe UI", 15F, FontStyle.Bold);
-            btnDeploy.ForeColor = Color.FromArgb(255, 128, 0);
-            btnDeploy.Location = new Point(635, 52);
+            btnDeploy.Font = new Font("Segoe UI", 11F, FontStyle.Bold);
+            btnDeploy.ForeColor = Color.Green;
+            btnDeploy.Location = new Point(635, 45);
             btnDeploy.Name = "btnDeploy";
-            btnDeploy.Size = new Size(259, 38);
+            btnDeploy.Size = new Size(131, 54);
             btnDeploy.TabIndex = 4;
             btnDeploy.Text = "Send Config Backup";
             btnDeploy.UseVisualStyleBackColor = true;
@@ -623,6 +625,17 @@
             groupBox2.TabStop = false;
             groupBox2.Text = "Download/Upload";
             // 
+            // btnrecovery
+            // 
+            btnrecovery.Font = new Font("Segoe UI", 11F, FontStyle.Bold);
+            btnrecovery.ForeColor = Color.Blue;
+            btnrecovery.Location = new Point(772, 45);
+            btnrecovery.Name = "btnrecovery";
+            btnrecovery.Size = new Size(131, 54);
+            btnrecovery.TabIndex = 4;
+            btnrecovery.Text = "Khôi phục dữ liệu";
+            btnrecovery.UseVisualStyleBackColor = true;
+            // 
             // frmToolBackup
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
@@ -720,5 +733,6 @@
         private GroupBox groupBox4;
         private PictureBox pictureBox1;
         private Button btnDeploy;
+        private Button btnrecovery;
     }
 }

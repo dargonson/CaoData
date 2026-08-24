@@ -395,3 +395,107 @@ git status --short --branch
 - Da build `AgentControl` thanh cong, 0 error; cac warning nullable/field cu cua project van con nhu truoc. Chua code nghiep vu backup.
 - Da loai bo cac khai bao Designer khong duoc su dung (`lvAgents` va cot du lieu cu `A/B/C/D/E`); khong thay doi chuc nang dang chay.
 - Git tren `main`, status sach neu user yeu cau commit/push.
+
+## 12. Module Backup FIRST/INC - bat dau 2026-08-22
+
+### 12.1 Checkpoint truoc khi lam
+
+- Commit checkpoint: `d012772` - `TRUOC KHI LAM BACKUP`.
+- Neu can doi chieu trang thai truoc module Backup thi dung commit nay; khong reset hard khi user chua yeu cau.
+
+### 12.2 Kien truc da them
+
+- Shared model/protocol rieng:
+  - `AgentShared/BackupModels.cs`
+  - Marker binary backup `0x04` trong `AgentShared/TransferFrameProtocol.cs`.
+  - Cac khoi chen vao file dung chung deu co comment `BO SUNG MODULE BACKUP`.
+- AgentControl:
+  - `AgentControl/Form1.Backup.cs`: UI, lay checkbox `tvRemoteFolders`, exclude, Browse, Deploy va xu ly packet backup.
+  - `AgentControl/BackupRepository.cs`: DB rieng `BackupManagement.db`, khong dung lock cua `AgentManagement.db`.
+  - `AgentControl/BackupReceiver.cs`: nhan binary chunk va ghi truc tiep tung file xuong dia.
+- AgentServices:
+  - `AgentServices/BackupFileScanner.cs`: scan metadata va exclude folder/pattern.
+  - `AgentServices/AgentBackupManager.cs`: luu config, scheduler, FIRST/INC, manifest va state.
+  - `Worker.cs` chi noi packet/socket vao manager; cac khoi chen co comment `BO SUNG MODULE BACKUP`.
+
+### 12.3 Hanh vi hien tai
+
+- Control chon Agent, tick o dia/thu muc tren `tvRemoteFolders`, khai bao noi luu tren Control, chu ky, gio, exclude folder va exclude extension/pattern, sau do bam `Send Config Backup`.
+- Khong cho backup toan bo root `C:\`; van cho chon Desktop hoac thu muc con cu the tren C.
+- Pattern mac dinh khi chua co config: `.tmp`, `.temp`, `~*`, `~$*`; ap dung toan cuc.
+- Config duoc luu trong bang `BackupConfigs` cua `BackupManagement.db` va gui xuong Agent.
+- Agent ghi config vao node `BackupConfig` trong file `appsettings.json` tai `AppContext.BaseDirectory`; khong tao file config moi.
+- Scheduler Agent kiem tra moi 30 giay, chi chay khi den gio va da du chu ky 1/2/... ngay.
+- Lan backup dau tien: Agent upload vao `FIRST-{AgentID}.inprogress`; chi khi nhan du moi doi thanh `FIRST-{AgentID}-yyyy-MM-dd` theo ngay hoan tat.
+- Cac lan tiep theo, ke ca ngay den chu ky full: Agent chi upload thay doi vao `INC-{AgentID}-yyyy-MM-dd`.
+- Khi den chu ky full (mac dinh 60 ngay), manifest INC dat `CreateSyntheticFull=true`; Control tu dung mot `FIRST-{AgentID}-yyyy-MM-dd` moi tu inventory sau khi da nhan xong INC, Agent khong upload lai toan bo.
+- Khong co session ID theo quyet dinh cua user; moi ngay toi da mot phien thanh cong.
+- File duoc stream binary 256 KB/chunk, khong base64, khong nen thanh mot cuc.
+- Noi luu tren Control:
+  - `{ControlStoragePath}/{SessionName}/Files/D/...`
+  - `{ControlStoragePath}/{SessionName}/manifest.json`
+- Manifest co danh sach `Created`, `Modified`, `Deleted`, `Errors`.
+- Control cap nhat `BackupFileInventory` gom ten, source path, relative path, size, last modified, deleted va session cap nhat.
+- State incremental cua Agent nam tai `%ProgramData%/Intel/Driver/BackupState/{AgentID}.json`; day la runtime state, khong phai file config.
+- Neu scan gap loi quyen truy cap thi van ghi vao manifest nhung khong ket luan file bi xoa, tranh note xoa nham.
+
+### 12.4 Synthetic Full sau chu ky (bo sung 2026-08-24)
+
+- Module rieng: `AgentControl/SyntheticFullBuilder.cs`; khong chen logic dung Full vao UI hay luong download/upload cu.
+- Control doc `BackupFileInventory` theo tung lo 2.000 dong, khong nap toan bo inventory vao RAM.
+- Voi moi file dang con hieu luc, Control lay ban moi nhat tu `UpdatedSession`:
+  - uu tien tao hard link trong cung volume;
+  - neu he thong file/volume khong cho hard link thi copy file noi bo tren Control.
+- Full duoc dung trong `{SessionName}.building`; `manifest.json.tmp` duoc ghi streaming theo lo. Chi khi ghi xong moi doi thanh `manifest.json`, sau do doi thu muc `.building` thanh ten `FIRST-...` chinh thuc.
+- Neu mat dien sau khi thu muc chinh thuc da duoc doi ten nhung truoc khi DB commit, lan sau Control thay `manifest.json` hoan chinh se khoi phuc moc session vao DB.
+- Khi Synthetic Full hoan tat, tat ca inventory dang song duoc rebase `UpdatedSession` sang FIRST moi trong cung transaction DB. Vi vay chu ky INC moi khong con phu thuoc file vat ly cua chu ky cu.
+- Control khong tu xoa FIRST/INC cu trong buoc nay; retention/don du lieu cu se thiet ke rieng de tranh xoa nham.
+- Agent cho phep toi da 12 gio cho Control dung Synthetic Full; phien thuong van timeout 30 giay.
+- Da chay integration test nho: FIRST cu + INC co sua/them/xoa -> FIRST moi co dung file, file da xoa khong con, manifest dung loai FIRST va inventory tro sang FIRST moi.
+
+### 12.5 Chua lam / can test thuc te
+
+- Chua lam restore theo dung pham vi da chot.
+- Scanner hien quet metadata full va so sanh state. Chua doc USN Journal; code scanner da tach rieng de toi uu USN sau khi luong FIRST/INC duoc test on dinh.
+- FIRST dau tien khong con dua toan bo danh sach `Created` vao goi SessionComplete. Control tao manifest streaming tu DB theo lo; Agent van scan metadata vao dictionary/state JSON de giu co dinh ke hoach FIRST qua restart.
+- Da build full solution thanh cong, 0 error. Can test thuc te voi mot thu muc nho truoc:
+  1. FIRST co file + manifest dung.
+  2. Sua/them/xoa file, doi lich sang ngay hop le hoac state test, kiem tra INC.
+  3. Kiem tra config thuc te duoc ghi vao appsettings cua ban Agent dang chay.
+- Khi debug cung may, phai stop Windows Service AgentServices de tranh hai instance cung AgentID da nhau/reconnect lien tuc.
+
+### 12.6 FIRST resume lau ngay (bo sung 2026-08-24)
+
+- FIRST ban dau dung ten lam viec on dinh `FIRST-{AgentID}` trong protocol va thu muc Control `FIRST-{AgentID}.inprogress`; khong dung session ID/ngay bat dau.
+- Agent luu `FirstStartedAtUtc` va `PendingFirstInventory` vao state runtime hien co truoc khi upload. Sau restart/mat ket noi, Agent tiep tuc dung dung danh sach da scan lan dau; file moi phat sinh khong chen vao FIRST va se duoc INC sau phat hien.
+- Truoc moi file, Agent gui `BACKUP_FIRST_FILE_RESUME_QUERY` kem source path, relative path, size va last modified hien tai. Control tra `BACKUP_FIRST_FILE_RESUME_INFO` gom `Offset`/`Completed`.
+- File dang nhan tren Control co duoi `.partial`. Offset vat ly cua `.partial` la moc resume chinh; DB checkpoint moi 8 MB va khi query/final. Neu mat ket noi giua chunk, lan sau Agent seek dung byte Control dang co.
+- DB `BackupManagement.db` co them bang rieng `FirstBackupRuns`, `FirstBackupFiles`, `FirstBackupSkipped` trong `AgentControl/FirstBackupStore.cs`; khong dung bang/lock cua DownloadQueue.
+- Moi file nhan xong moi doi `.partial` thanh ten that, append mot dong vao `manifest.journal`, sau do danh dau `Completed` trong DB. File da Completed duoc bo qua khi resume.
+- Neu mot file khong mo/doc/upload duoc, bi xoa, dang bi khoa, hoac doi size/last modified trong luc truyen: Agent gui `BACKUP_FIRST_FILE_SKIP`, Control xoa `.partial`/ban final cua rieng file do, ghi `Skipped` + reason vao DB/journal va tiep tuc file khac. Mat ket noi Control khong duoc tinh la Skipped; ca phien dung de resume.
+- File Skipped khong duoc dua vao `Created`/`BackupFileInventory`; Agent luu `PendingFirstSkippedFiles` de khong thu lai sau restart. Khi FIRST chot, file nay bi loai khoi inventory Agent, nen neu no con ton tai thi INC ke tiep se xem la file moi va upload lai. Reason duoc ghi vao `Errors` cua manifest FIRST.
+- Khi `Completed + Skipped == PlannedFileCount`, Control ghi `manifest.json.tmp` streaming theo lo 2.000 dong, doi thanh `manifest.json`, dat run `Finalizing`, roi doi thu muc theo ngay hoan tat thuc te:
+  - vi du bat dau 2026-08-18, hoan tat 2026-08-22 -> `FIRST-{AgentID}-2026-08-22`.
+- Sau khi doi ten, Control commit session/inventory. Neu mat dien giua doi thu muc va commit DB, trang thai `Finalizing` + manifest hoan chinh duoc dung de khoi phuc khi Agent ket noi lai.
+- Neu Control da chot FIRST nhung Agent chua kip luu state/nhan ACK, lan ket noi lai Control xac nhan cac file da Completed va tra ket qua thanh cong de Agent chot `LastSuccessfulBackupUtc`/`LastFullBackupUtc`.
+- Da integration test: gui 400.000 byte cua file 1, tao lai `BackupReceiver` nhu Control restart, resume dung offset 400.000, gui tiep file 1 + file 2, chot folder ngay hoan tat, kiem tra noi dung, journal, manifest va inventory deu dung.
+- Da integration test Skipped: ke hoach 2 file, nhan thanh cong 1 file va bo qua 1 file dang khoa; FIRST van chot, manifest `Created` chi co 1, `Errors` co reason cua file bi bo qua, inventory chi co file da backup.
+
+## 13. AgentControl chay nen/System Tray - 2026-08-24
+
+- `AgentControl.csproj` da doi `OutputType` tu `Exe` sang `WinExe`, vi vay AgentControl khong con mo kem cua so console mau den. Thay doi nay chi anh huong cach hien thi khi khoi dong, khong thay doi socket, backup hay cac chuc nang hien co.
+- Module tray duoc tach rieng tai `AgentControl/Form1.Tray.cs`; `Form1.cs` chi goi `InitializeTrayModule()` sau khi khoi tao cac module hien co.
+- Bam nut X tren cua so AgentControl se an form va bo khoi taskbar, nhung chuong trinh/server van tiep tuc chay trong system tray.
+- Nhan dup icon tray hoac chuot phai chon `Mo AgentControl` de hien lai cua so.
+- Chuong trinh chi thoat that khi chuot phai icon tray chon `Exit`; khi Windows shutdown van cho phep form dong binh thuong.
+
+## 14. Ngan system sleep khi truyen du lieu - 2026-08-24
+
+- Module dung chung `AgentShared/SystemSleepBlocker.cs` dung Windows Power Request (`SystemRequired`) theo co che dem tham chieu, ho tro nhieu tac vu truyen file chay dong thoi.
+- Chi yeu cau Windows khong dua may vao sleep; khong dung `DisplayRequired`, vi vay man hinh van duoc phep tat theo thoi gian da cai trong Windows.
+- Power Request khong ngan shutdown/restart. Khi chuong trinh/tac vu ket thuc, request duoc clear va dispose.
+- AgentControl giu mot sleep block trong suot vong doi `Application.Run`; thu xuong tray van tiep tuc chan system sleep cho den khi chon `Exit`.
+- AgentServices chi chan sleep trong cac khoang sau:
+  - Control upload file xuong Agent: giu tu chunk dau den chunk cuoi; neu loi/mat ket noi/service stop thi tu giai phong.
+  - Control download file tu Agent: giu trong suot qua trinh checksum/doc/gui file.
+  - FIRST/INC backup: giu trong toan bo phien quet, upload va cho Control chot ket qua.

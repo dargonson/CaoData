@@ -54,6 +54,8 @@ namespace AgentControl
             ListboxAgents.AgentDeleteClicked += ListboxAgents_AgentDeleteClicked;
             ListboxAgents.AgentOwnerEditRequested += ListboxAgents_AgentOwnerEditRequested;
             lvRemoteFiles.View = View.Details;// Đảm bảo ListView hiển thị dạng bảng và có cột lúc chạy
+            InitializeBackupModule();
+            InitializeTrayModule();
         }
 
         private ImageList shellImages = new ImageList();
@@ -502,6 +504,7 @@ namespace AgentControl
             {
                 targetNode.Nodes.Add(CreateRemoteFolderNode(agentId, folder.FullPath));
             }
+            ApplyConfiguredBackupChecks(targetNode.Nodes);
             tvRemoteFolders.EndUpdate();
 
             _pendingDirectoryRequests.TryRemove(agentId, out _);
@@ -1316,6 +1319,13 @@ namespace AgentControl
                             continue;
                         }
 
+                        // BO SUNG MODULE BACKUP: marker rieng, khong di qua luong download hien co.
+                        if (firstByteBuffer[0] == TransferFrameProtocol.BinaryBackupChunkMarker)
+                        {
+                            await _backupReceiver.HandleFileChunkAsync(stream, packetSize);
+                            continue;
+                        }
+
                         byte[] dataBuffer = ArrayPool<byte>.Shared.Rent(packetSize);
 
                         // 2. Đọc đủ số lượng byte của gói dữ liệu JSON
@@ -1335,6 +1345,11 @@ namespace AgentControl
                         if (packet != null)
                         {
                             currentAgentID = packet.AgentID;
+
+                            if (await TryHandleBackupPacketAsync(packet, client))
+                            {
+                                continue;
+                            }
 
                             // --- PHÂN LOẠI CÁC LOẠI GÓI TIN ĐỔ VỀ ---
 
@@ -1363,6 +1378,7 @@ namespace AgentControl
                                         {
                                             tvRemoteFolders.Nodes.Add(CreateRemoteFolderNode(packet.AgentID, drive));
                                         }
+                                        ApplyConfiguredBackupChecks(tvRemoteFolders.Nodes);
                                     }));
                                 }
                             }

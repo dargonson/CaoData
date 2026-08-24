@@ -12,6 +12,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using AgentShared;
+using System.Collections.Concurrent;
 // Dùng chung định dạng gói tin với Server
 
 namespace AgentService
@@ -23,6 +24,8 @@ namespace AgentService
         private readonly ILogger<Worker> _logger;
         private readonly IConfiguration _configuration;
         private readonly AgentUpdateClient _updateClient;
+        // BO SUNG MODULE BACKUP: scheduler/engine tach rieng, Worker chi noi socket.
+        private readonly AgentBackupManager _backupManager;
         private string _activeControlHost = "127.0.0.1";
         private int _activeControlPort = 9000;
 
@@ -31,6 +34,8 @@ namespace AgentService
         private bool _isConnected = false;
         private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim _downloadLock = new SemaphoreSlim(3, 3);
+        private readonly ConcurrentDictionary<string, IDisposable> _uploadSleepBlocks =
+            new ConcurrentDictionary<string, IDisposable>(StringComparer.OrdinalIgnoreCase);
 
         // Chu kỳ Reconnect lũy tiến theo yêu cầu: 5s, 10s, 20s, 30s
         private readonly int[] _reconnectDelays = { 5, 10, 20, 30 };
@@ -41,6 +46,13 @@ namespace AgentService
             _logger = logger;
             _configuration = configuration;
             _updateClient = new AgentUpdateClient(SendPacketAsync, () => (_activeControlHost, _activeControlPort), logger);
+            string agentId = HardwareInfo.GetUniqueAgentID();
+            _backupManager = new AgentBackupManager(
+                logger,
+                agentId,
+                () => _isConnected,
+                SendBackupPacketAsync,
+                SendBackupChunkAsync);
         }
 
 
@@ -295,6 +307,9 @@ namespace AgentService
             // Kiểm tra logger trước khi ghi để tránh NullReferenceException
             _logger?.LogInformation("Agent Service bắt đầu khởi chạy với ID: {AgentID}", agentID);
 
+            // BO SUNG MODULE BACKUP: scheduler doc appsettings va chi chay khi den lich.
+            _ = _backupManager.RunSchedulerAsync(stoppingToken);
+
             // Vòng lặp duy trì kết nối vĩnh viễn...
             while (!stoppingToken.IsCancellationRequested)
             {
@@ -424,6 +439,68 @@ namespace AgentService
             }
         }
 
+        // BO SUNG MODULE BACKUP: bien the co CancellationToken va bao loi cho engine.
+        private async Task SendBackupPacketAsync(SocketPacket packet, CancellationToken token)
+        {
+            if (!_isConnected || _stream == null)
+            {
+                throw new IOException("Chưa kết nối tới AgentControl.");
+            }
+
+            await _sendLock.WaitAsync(token);
+            try
+            {
+                if (!_isConnected || _stream == null)
+                {
+                    throw new IOException("Mất kết nối tới AgentControl.");
+                }
+
+                await TransferFrameProtocol.WriteJsonPacketAsync(_stream, packet, token);
+            }
+            catch
+            {
+                _isConnected = false;
+                throw;
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
+        }
+
+        // BO SUNG MODULE BACKUP: stream file qua marker 0x04, dung chung send lock.
+        private async Task SendBackupChunkAsync(
+            BackupFileChunkHeader header,
+            byte[] buffer,
+            int count,
+            CancellationToken token)
+        {
+            if (!_isConnected || _stream == null)
+            {
+                throw new IOException("Chưa kết nối tới AgentControl.");
+            }
+
+            await _sendLock.WaitAsync(token);
+            try
+            {
+                if (!_isConnected || _stream == null)
+                {
+                    throw new IOException("Mất kết nối tới AgentControl.");
+                }
+
+                await TransferFrameProtocol.WriteBinaryBackupChunkAsync(_stream, header, buffer, count, token);
+            }
+            catch
+            {
+                _isConnected = false;
+                throw;
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
+        }
+
         private async Task SendDownloadChunkAsync(FileChunkPacket chunk, byte[] buffer, int count, CancellationToken token)
         {
             if (!_isConnected || _stream == null) return;
@@ -501,6 +578,7 @@ namespace AgentService
             int bodySize = 0;
             bool bodyCopyStarted = false;
             bool bodyCopyCompleted = false;
+            bool transferFinished = false;
 
             try
             {
@@ -520,6 +598,13 @@ namespace AgentService
                     await TransferFrameProtocol.DrainExactAsync(stream, bodySize, token);
                     return;
                 }
+
+                _uploadSleepBlocks.GetOrAdd(
+                    uploadId,
+                    _ => SystemSleepBlocker.PreventSystemSleep(
+                        "AgentServices đang nhận file từ AgentControl."));
+
+                transferFinished = chunk.IsLastChunk;
 
                 string? targetFolder = Path.GetDirectoryName(targetPath);
                 if (!string.IsNullOrWhiteSpace(targetFolder))
@@ -581,6 +666,7 @@ namespace AgentService
             {
                 if (chunk != null)
                 {
+                    transferFinished = true;
                     if (!bodyCopyStarted && bodySize > 0)
                     {
                         try
@@ -613,6 +699,25 @@ namespace AgentService
                 if (bodyCopyStarted && !bodyCopyCompleted)
                 {
                     throw;
+                }
+            }
+            finally
+            {
+                if (transferFinished && chunk != null &&
+                    _uploadSleepBlocks.TryRemove(chunk.DownloadID, out IDisposable? sleepBlock))
+                {
+                    sleepBlock.Dispose();
+                }
+            }
+        }
+
+        private void ReleaseUploadSleepBlocks()
+        {
+            foreach (string uploadId in _uploadSleepBlocks.Keys)
+            {
+                if (_uploadSleepBlocks.TryRemove(uploadId, out IDisposable? sleepBlock))
+                {
+                    sleepBlock.Dispose();
                 }
             }
         }
@@ -1156,6 +1261,27 @@ namespace AgentService
 
                     if (packet != null)
                     {
+                        // BO SUNG MODULE BACKUP: config va ACK cua phien backup.
+                        if (packet.Type == BackupPacketTypes.ConfigDeploy)
+                        {
+                            BackupConfigAck ack = await _backupManager.ApplyConfigurationAsync(packet.Data, token);
+                            await SendPacketAsync(new SocketPacket
+                            {
+                                Type = BackupPacketTypes.ConfigAck,
+                                AgentID = packet.AgentID,
+                                Data = JsonSerializer.Serialize(ack)
+                            });
+                            continue;
+                        }
+
+                        if (packet.Type == BackupPacketTypes.SessionReady ||
+                            packet.Type == BackupPacketTypes.SessionResult ||
+                            packet.Type == BackupPacketTypes.FirstFileResumeInfo)
+                        {
+                            _backupManager.HandleSessionSignal(packet.Type, packet.Data);
+                            continue;
+                        }
+
                         if (AgentUpdateClient.IsUpdatePacket(packet.Type))
                         {
                             await _updateClient.HandlePacketAsync(packet, token);
@@ -1179,6 +1305,8 @@ namespace AgentService
                                 _ = Task.Run(async () =>
                                 {
                                     await _downloadLock.WaitAsync(token);
+                                    using IDisposable sleepBlock = SystemSleepBlocker.PreventSystemSleep(
+                                        "AgentServices đang gửi file về AgentControl.");
                                     DownloadRequestModel? request = null;
                                     long currentOffset = 0;
                                     long totalBytes = 0;
@@ -1457,6 +1585,7 @@ namespace AgentService
             finally
             {
                 _isConnected = false;
+                ReleaseUploadSleepBlocks();
                 _logger?.LogWarning("Mất kết nối tới Server. Đã kích hoạt trạng thái chờ Reconnect...");
             }
         }
@@ -1464,6 +1593,7 @@ namespace AgentService
         public override async Task StopAsync(CancellationToken cancellationToken)
         {
             _isConnected = false;
+            ReleaseUploadSleepBlocks();
 
             try
             {

@@ -1,3 +1,5 @@
+using AgentShared;
+
 namespace AgentControl
 {
     internal static class Program
@@ -12,6 +14,8 @@ namespace AgentControl
             // To customize application configuration such as set high DPI settings or default font,
             // see https://aka.ms/applicationconfiguration.
             ApplicationConfiguration.Initialize();
+            using IDisposable sleepBlock = SystemSleepBlocker.PreventSystemSleep(
+                "AgentControl đang chạy máy chủ truyền file và backup.");
             Application.Run(new frmToolBackup());
         }
     }
