@@ -340,7 +340,7 @@ namespace AgentControl
                         await _backupReceiver.BeginSessionAsync(request);
                         result.Success = true;
                         result.Message = "Control đã sẵn sàng nhận backup.";
-                        BackupDashboardSessionStarted(request);
+                        await BackupDashboardSessionStartedAsync(request);
                     }
                     catch (Exception ex)
                     {
@@ -365,7 +365,7 @@ namespace AgentControl
                     throw new InvalidDataException("Dữ liệu tiến độ backup không hợp lệ.");
                 }
                 EnsureBackupPayloadAgent(packet.AgentID, progress.AgentID);
-                BackupDashboardProgressReceived(progress);
+                await BackupDashboardProgressReceivedAsync(progress);
                 return true;
             }
 
@@ -387,11 +387,14 @@ namespace AgentControl
                 {
                     if (result.Success)
                     {
-                        BackupDashboardSessionCompleted(packet.AgentID, manifest.SessionName, manifest.StartedAtUtc);
+                        await BackupDashboardSessionCompletedAsync(
+                            packet.AgentID,
+                            manifest.SessionName,
+                            manifest.StartedAtUtc);
                     }
                     else
                     {
-                        BackupDashboardSessionFailed(packet.AgentID, manifest.SessionName);
+                        await BackupDashboardSessionFailedAsync(packet.AgentID, manifest.SessionName);
                     }
                 }
 

@@ -1852,7 +1852,7 @@ namespace AgentControl
                         FailPendingUploadsForAgent(currentAgentID);
                         await SQLiteHelper.FailPendingDownloadsByAgentAsync(currentAgentID);
                         await SQLiteHelper.SetAgentOfflineAsync(currentAgentID);
-                        SetBackupDashboardAgentOnline(currentAgentID, false);
+                        await SetBackupDashboardAgentOnlineAsync(currentAgentID, false);
                         if (!IsDisposed && IsHandleCreated)
                         {
                             BeginInvoke(new Action(async () =>
@@ -1887,7 +1887,7 @@ namespace AgentControl
                             // Cập nhật SQLite và làm mới UI [cite: 885]
                             await SQLiteHelper.FailPendingDownloadsByAgentAsync(agentId);
                             await SQLiteHelper.SetAgentOfflineAsync(agentId);
-                            SetBackupDashboardAgentOnline(agentId, false);
+                            await SetBackupDashboardAgentOnlineAsync(agentId, false);
                             if (!IsDisposed && IsHandleCreated)
                             {
                                 BeginInvoke(new Action(async () =>

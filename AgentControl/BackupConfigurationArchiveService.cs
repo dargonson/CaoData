@@ -14,6 +14,7 @@ namespace AgentControl
         {
             "BackupConfigs",
             "BackupSessions",
+            "BackupDashboardSnapshots",
             "BackupFileInventory",
             "FirstBackupRuns",
             "FirstBackupFiles",
@@ -118,6 +119,7 @@ namespace AgentControl
                     "FirstBackupSkipped",
                     "FirstBackupRuns",
                     "BackupFileInventory",
+                    "BackupDashboardSnapshots",
                     "BackupSessions",
                     "BackupConfigs"
                 })

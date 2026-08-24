@@ -1,4 +1,6 @@
 using AgentShared;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 
 namespace AgentControl
 {
@@ -8,6 +10,11 @@ namespace AgentControl
             new Dictionary<string, BackupDashboardAgentState>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, DataGridViewRow> _backupDashboardRows =
             new Dictionary<string, DataGridViewRow>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, BackupDashboardSnapshot> _latestBackupDashboardSnapshots =
+            new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, long> _lastBackupDashboardSnapshotWrites =
+            new(StringComparer.OrdinalIgnoreCase);
+        private static readonly TimeSpan BackupDashboardSnapshotWriteInterval = TimeSpan.FromSeconds(1);
         private void InitializeBackupDashboardModule()
         {
             typeof(DataGridView)
@@ -36,12 +43,22 @@ namespace AgentControl
             {
                 Dictionary<string, BackupConfiguration> configs = await BackupRepository.GetAllConfigsAsync();
                 Dictionary<string, DateTime> lastSessions = await BackupRepository.GetLatestSuccessfulSessionStartsAsync();
+                Dictionary<string, BackupDashboardSnapshot> snapshots =
+                    await BackupRepository.GetAllDashboardSnapshotsAsync();
 
                 foreach ((string agentId, BackupConfiguration config) in configs)
                 {
                     if (_backupDashboardStates.TryGetValue(agentId, out BackupDashboardAgentState? state))
                     {
                         state.SetConfiguration(config);
+                    }
+                }
+                foreach ((string agentId, BackupDashboardSnapshot snapshot) in snapshots)
+                {
+                    if (_backupDashboardStates.TryGetValue(agentId, out BackupDashboardAgentState? state) &&
+                        state.RestoreSnapshot(snapshot))
+                    {
+                        _latestBackupDashboardSnapshots[agentId] = snapshot;
                     }
                 }
                 foreach ((string agentId, DateTime startedAtUtc) in lastSessions)
@@ -106,7 +123,7 @@ namespace AgentControl
             });
         }
 
-        private void BackupDashboardSessionStarted(BackupSessionBegin begin)
+        private async Task BackupDashboardSessionStartedAsync(BackupSessionBegin begin)
         {
             RunOnBackupDashboardUi(() =>
             {
@@ -116,21 +133,70 @@ namespace AgentControl
                     RefreshBackupDashboardRow(state);
                 }
             });
+
+            DateTime observedAtUtc = DateTime.UtcNow;
+            BackupDashboardSnapshot? snapshot;
+            if (_latestBackupDashboardSnapshots.TryGetValue(begin.AgentID, out BackupDashboardSnapshot? latest) &&
+                latest.SessionState == BackupDashboardSessionState.Active &&
+                latest.SessionName.Equals(begin.SessionName, StringComparison.OrdinalIgnoreCase) &&
+                latest.StartedAtUtc == begin.StartedAtUtc)
+            {
+                latest.BackupType = begin.BackupType ?? latest.BackupType;
+                latest.PlannedFileCount = begin.PlannedFileCount;
+                latest.PlannedTotalBytes = begin.PlannedTotalBytes;
+                latest.Touch(observedAtUtc);
+                snapshot = latest;
+            }
+            else
+            {
+                snapshot = BackupDashboardSnapshot.FromBegin(begin, observedAtUtc);
+            }
+            if (snapshot != null)
+            {
+                EnsureBackupDashboardSnapshotRevision(snapshot);
+                _latestBackupDashboardSnapshots[snapshot.AgentId] = snapshot;
+                await TrySaveBackupDashboardSnapshotAsync(snapshot);
+            }
         }
 
-        private void BackupDashboardProgressReceived(BackupProgressUpdate update)
+        private async Task BackupDashboardProgressReceivedAsync(BackupProgressUpdate update)
         {
+            DateTime observedAtUtc = DateTime.UtcNow;
             RunOnBackupDashboardUi(() =>
             {
                 BackupDashboardAgentState state = GetOrCreateBackupDashboardState(update.AgentID);
-                if (state.ApplyProgress(update, DateTime.UtcNow))
+                if (state.ApplyProgress(update, observedAtUtc))
                 {
                     RefreshBackupDashboardRow(state);
                 }
             });
+
+            BackupDashboardSnapshot? snapshot = BackupDashboardSnapshot.FromProgress(update, observedAtUtc);
+            if (snapshot == null)
+            {
+                return;
+            }
+
+            if (!_latestBackupDashboardSnapshots.TryGetValue(snapshot.AgentId, out BackupDashboardSnapshot? active) ||
+                active.SessionState != BackupDashboardSessionState.Active ||
+                !active.SessionName.Equals(snapshot.SessionName, StringComparison.OrdinalIgnoreCase) ||
+                active.StartedAtUtc != snapshot.StartedAtUtc)
+            {
+                return;
+            }
+
+            snapshot.Revision = Math.Max(snapshot.Revision, active.Revision + 1);
+            _latestBackupDashboardSnapshots[snapshot.AgentId] = snapshot;
+            if (ShouldWriteBackupDashboardSnapshot(snapshot.AgentId))
+            {
+                await TrySaveBackupDashboardSnapshotAsync(snapshot);
+            }
         }
 
-        private void BackupDashboardSessionCompleted(string agentId, string sessionName, DateTime startedAtUtc)
+        private async Task BackupDashboardSessionCompletedAsync(
+            string agentId,
+            string sessionName,
+            DateTime startedAtUtc)
         {
             RunOnBackupDashboardUi(() =>
             {
@@ -142,9 +208,20 @@ namespace AgentControl
                     RefreshBackupDashboardRow(state);
                 }
             });
+
+            BackupDashboardSnapshot? snapshot = CreateTerminalBackupDashboardSnapshot(
+                agentId,
+                sessionName,
+                startedAtUtc,
+                BackupDashboardSessionState.Completed);
+            if (snapshot != null)
+            {
+                _latestBackupDashboardSnapshots[agentId] = snapshot;
+                await TrySaveBackupDashboardSnapshotAsync(snapshot);
+            }
         }
 
-        private void BackupDashboardSessionFailed(string agentId, string sessionName)
+        private async Task BackupDashboardSessionFailedAsync(string agentId, string sessionName)
         {
             RunOnBackupDashboardUi(() =>
             {
@@ -156,9 +233,20 @@ namespace AgentControl
                     RefreshBackupDashboardRow(state);
                 }
             });
+
+            BackupDashboardSnapshot? snapshot = CreateTerminalBackupDashboardSnapshot(
+                agentId,
+                sessionName,
+                null,
+                BackupDashboardSessionState.Failed);
+            if (snapshot != null)
+            {
+                _latestBackupDashboardSnapshots[agentId] = snapshot;
+                await TrySaveBackupDashboardSnapshotAsync(snapshot);
+            }
         }
 
-        private void SetBackupDashboardAgentOnline(string agentId, bool online)
+        private async Task SetBackupDashboardAgentOnlineAsync(string agentId, bool online)
         {
             RunOnBackupDashboardUi(() =>
             {
@@ -166,6 +254,13 @@ namespace AgentControl
                 state.SetOnline(online);
                 RefreshBackupDashboardRow(state);
             });
+
+            if (!online &&
+                _latestBackupDashboardSnapshots.TryGetValue(agentId, out BackupDashboardSnapshot? snapshot))
+            {
+                snapshot.Touch(DateTime.UtcNow);
+                await TrySaveBackupDashboardSnapshotAsync(snapshot);
+            }
         }
 
         private void RemoveBackupDashboardAgent(string agentId)
@@ -173,6 +268,8 @@ namespace AgentControl
             RunOnBackupDashboardUi(() =>
             {
                 _backupDashboardStates.Remove(agentId);
+                _latestBackupDashboardSnapshots.TryRemove(agentId, out _);
+                _lastBackupDashboardSnapshotWrites.TryRemove(agentId, out _);
                 if (_backupDashboardRows.Remove(agentId, out DataGridViewRow? row) &&
                     row.DataGridView == dgvDashboard)
                 {
@@ -188,6 +285,8 @@ namespace AgentControl
             {
                 BackupDashboardAgentState state = GetOrCreateBackupDashboardState(agentId);
                 state.ResetBackupConfigurationAndHistory();
+                _latestBackupDashboardSnapshots.TryRemove(agentId, out _);
+                _lastBackupDashboardSnapshotWrites.TryRemove(agentId, out _);
                 RefreshBackupDashboardRow(state);
             });
         }
@@ -389,6 +488,96 @@ namespace AgentControl
                 suffix++;
             }
             return $"{value:0.##} {suffixes[suffix]}";
+        }
+
+        private bool ShouldWriteBackupDashboardSnapshot(string agentId)
+        {
+            long now = Stopwatch.GetTimestamp();
+            long intervalTicks = (long)(BackupDashboardSnapshotWriteInterval.TotalSeconds * Stopwatch.Frequency);
+            while (true)
+            {
+                if (!_lastBackupDashboardSnapshotWrites.TryGetValue(agentId, out long lastWrite))
+                {
+                    if (_lastBackupDashboardSnapshotWrites.TryAdd(agentId, now))
+                    {
+                        return true;
+                    }
+                    continue;
+                }
+
+                if (now - lastWrite < intervalTicks)
+                {
+                    return false;
+                }
+
+                if (_lastBackupDashboardSnapshotWrites.TryUpdate(agentId, now, lastWrite))
+                {
+                    return true;
+                }
+            }
+        }
+
+        private BackupDashboardSnapshot? CreateTerminalBackupDashboardSnapshot(
+            string agentId,
+            string sessionName,
+            DateTime? startedAtUtc,
+            BackupDashboardSessionState terminalState)
+        {
+            DateTime observedAtUtc = DateTime.UtcNow;
+            if (_latestBackupDashboardSnapshots.TryGetValue(agentId, out BackupDashboardSnapshot? latest) &&
+                latest.SessionName.Equals(sessionName, StringComparison.OrdinalIgnoreCase))
+            {
+                return latest.Finish(terminalState, observedAtUtc);
+            }
+
+            if (!startedAtUtc.HasValue || startedAtUtc.Value == default)
+            {
+                return null;
+            }
+
+            BackupDashboardSnapshot? empty = BackupDashboardSnapshot.FromBegin(
+                new BackupSessionBegin
+                {
+                    AgentID = agentId,
+                    SessionName = sessionName,
+                    StartedAtUtc = startedAtUtc.Value
+                },
+                observedAtUtc);
+            return empty?.Finish(terminalState, observedAtUtc);
+        }
+
+        private async Task TrySaveBackupDashboardSnapshotAsync(BackupDashboardSnapshot snapshot)
+        {
+            try
+            {
+                await BackupRepository.SaveDashboardSnapshotAsync(snapshot);
+                _lastBackupDashboardSnapshotWrites[snapshot.AgentId] = Stopwatch.GetTimestamp();
+            }
+            catch (Exception ex)
+            {
+                _lastBackupDashboardSnapshotWrites.TryRemove(snapshot.AgentId, out _);
+                try
+                {
+                    await SQLiteHelper.SaveLogAsync(
+                        "Backup Dashboard",
+                        $"Không thể lưu tiến độ Agent {snapshot.AgentId}: {ex.Message}");
+                }
+                catch
+                {
+                    // Lỗi lưu Dashboard tuyệt đối không được ngắt phiên backup đang chạy.
+                }
+            }
+        }
+
+        private void EnsureBackupDashboardSnapshotRevision(BackupDashboardSnapshot snapshot)
+        {
+            if (_latestBackupDashboardSnapshots.TryGetValue(
+                    snapshot.AgentId,
+                    out BackupDashboardSnapshot? previous) &&
+                !ReferenceEquals(previous, snapshot))
+            {
+                snapshot.Revision = Math.Max(snapshot.Revision, previous.Revision + 1);
+            }
         }
     }
 }

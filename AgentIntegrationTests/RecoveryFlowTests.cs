@@ -1,5 +1,6 @@
 using AgentControl;
 using AgentShared;
+using System.Drawing;
 using System.Security.Cryptography;
 using System.Text.Json;
 

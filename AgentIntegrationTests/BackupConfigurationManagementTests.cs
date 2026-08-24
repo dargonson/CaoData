@@ -284,6 +284,23 @@ public sealed class BackupConfigurationManagementTests
             physicalFolder,
             true,
             "OK");
+        await BackupRepository.SaveDashboardSnapshotAsync(
+            BackupDashboardSnapshot.FromProgress(
+                new BackupProgressUpdate
+                {
+                    AgentID = agentId,
+                    SessionName = Path.GetFileName(physicalFolder),
+                    BackupType = "FIRST",
+                    StartedAtUtc = DateTime.UtcNow.AddMinutes(-2),
+                    PlannedFileCount = 1,
+                    ProcessedFileCount = 1,
+                    PlannedTotalBytes = 4,
+                    ProcessedBytes = 4,
+                    TransferredBytes = 4,
+                    ProgressPercentage = 100,
+                    CurrentFile = physicalFile
+                },
+                DateTime.UtcNow)!);
         await FirstBackupStore.BeginRunAsync(
             new BackupSessionBegin
             {
@@ -310,6 +327,7 @@ public sealed class BackupConfigurationManagementTests
         JsonElement tables = archive.RootElement.GetProperty("Tables");
         Assert.Single(tables.GetProperty("BackupConfigs").EnumerateArray());
         Assert.Single(tables.GetProperty("BackupSessions").EnumerateArray());
+        Assert.Single(tables.GetProperty("BackupDashboardSnapshots").EnumerateArray());
         Assert.Single(tables.GetProperty("BackupFileInventory").EnumerateArray());
         Assert.Single(tables.GetProperty("FirstBackupRuns").EnumerateArray());
         Assert.Null(await BackupRepository.GetConfigAsync(agentId));
@@ -317,6 +335,10 @@ public sealed class BackupConfigurationManagementTests
         Assert.DoesNotContain(
             agentId,
             (await BackupRepository.GetLatestSuccessfulSessionStartsAsync()).Keys,
+            StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            agentId,
+            (await BackupRepository.GetAllDashboardSnapshotsAsync()).Keys,
             StringComparer.OrdinalIgnoreCase);
     }
 

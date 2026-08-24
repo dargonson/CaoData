@@ -15,6 +15,7 @@ namespace AgentControl
     {
         private DateTime? _lastSpeedSampleUtc;
         private long _lastTransferredBytes;
+        private bool _latestSessionCompleted;
 
         public string AgentId { get; }
         public string MachineName { get; private set; } = string.Empty;
@@ -38,11 +39,11 @@ namespace AgentControl
         public BackupDashboardProgressMode ProgressMode { get; private set; }
         public string StatusText { get; private set; } = string.Empty;
         public bool CanManageConfiguration => Configuration != null && IsOnline && !HasActiveSession;
-        public string ProgressDisplayText => ProgressMode == BackupDashboardProgressMode.Waiting
-            ? LastSuccessfulSessionStartedAtUtc.HasValue
-                ? $"HOÀN THÀNH {LastSuccessfulSessionStartedAtUtc.Value.ToLocalTime():yyyy-MM-dd}"
-                : "CHƯA BACKUP"
-            : $"{ProgressPercentage}%";
+        public string ProgressDisplayText => _latestSessionCompleted && LastSuccessfulSessionStartedAtUtc.HasValue
+            ? $"HOÀN THÀNH {LastSuccessfulSessionStartedAtUtc.Value.ToLocalTime():yyyy-MM-dd}"
+            : ProgressMode == BackupDashboardProgressMode.Waiting
+                ? "CHƯA BACKUP"
+                : $"{ProgressPercentage}%";
 
         public BackupDashboardAgentState(string agentId)
         {
@@ -70,6 +71,7 @@ namespace AgentControl
             BackupType = string.Empty;
             StartedAtUtc = null;
             LastSuccessfulSessionStartedAtUtc = null;
+            _latestSessionCompleted = false;
             PlannedFileCount = 0;
             ProcessedFileCount = 0;
             PlannedTotalBytes = 0;
@@ -90,6 +92,12 @@ namespace AgentControl
                 startedAtUtc.Value >= LastSuccessfulSessionStartedAtUtc.Value)
             {
                 LastSuccessfulSessionStartedAtUtc = startedAtUtc;
+            }
+            if (startedAtUtc.HasValue &&
+                !HasActiveSession &&
+                (!StartedAtUtc.HasValue || startedAtUtc.Value >= StartedAtUtc.Value))
+            {
+                _latestSessionCompleted = true;
             }
             RefreshVisualStatus();
         }
@@ -114,7 +122,25 @@ namespace AgentControl
                 return false;
             }
 
+            bool isResumingSameSession = HasActiveSession &&
+                ActiveSessionName.Equals(begin.SessionName, StringComparison.OrdinalIgnoreCase) &&
+                StartedAtUtc == begin.StartedAtUtc;
+            if (isResumingSameSession)
+            {
+                BackupType = begin.BackupType ?? BackupType;
+                PlannedFileCount = begin.PlannedFileCount;
+                PlannedTotalBytes = begin.PlannedTotalBytes;
+                IsOnline = true;
+                BytesPerSecond = 0;
+                _lastSpeedSampleUtc = null;
+                _lastTransferredBytes = TransferredBytes;
+                ProgressMode = BackupDashboardProgressMode.Sending;
+                StatusText = "ĐANG GỬI";
+                return true;
+            }
+
             HasActiveSession = true;
+            _latestSessionCompleted = false;
             ActiveSessionName = begin.SessionName;
             BackupType = begin.BackupType ?? string.Empty;
             StartedAtUtc = begin.StartedAtUtc;
@@ -131,6 +157,57 @@ namespace AgentControl
             IsOnline = true;
             ProgressMode = BackupDashboardProgressMode.Sending;
             StatusText = "ĐANG GỬI";
+            return true;
+        }
+
+        public bool RestoreSnapshot(BackupDashboardSnapshot? snapshot)
+        {
+            if (snapshot == null ||
+                !AgentId.Equals(snapshot.AgentId, StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(snapshot.SessionName) ||
+                snapshot.StartedAtUtc == default ||
+                snapshot.PlannedFileCount < 0 || snapshot.ProcessedFileCount < 0 ||
+                snapshot.PlannedTotalBytes < 0 || snapshot.ProcessedBytes < 0 ||
+                snapshot.TransferredBytes < 0)
+            {
+                return false;
+            }
+
+            ActiveSessionName = snapshot.SessionName.Trim();
+            BackupType = snapshot.BackupType?.Trim() ?? string.Empty;
+            StartedAtUtc = snapshot.StartedAtUtc;
+            PlannedFileCount = snapshot.PlannedFileCount;
+            ProcessedFileCount = snapshot.PlannedFileCount > 0
+                ? Math.Min(snapshot.ProcessedFileCount, snapshot.PlannedFileCount)
+                : snapshot.ProcessedFileCount;
+            PlannedTotalBytes = snapshot.PlannedTotalBytes;
+            ProcessedBytes = snapshot.PlannedTotalBytes > 0
+                ? Math.Min(snapshot.ProcessedBytes, snapshot.PlannedTotalBytes)
+                : snapshot.ProcessedBytes;
+            TransferredBytes = snapshot.TransferredBytes;
+            ProgressPercentage = Math.Clamp(snapshot.ProgressPercentage, 0, 100);
+            CurrentFile = snapshot.CurrentFile?.Trim() ?? string.Empty;
+            HasActiveSession = snapshot.SessionState == BackupDashboardSessionState.Active;
+            _latestSessionCompleted = snapshot.SessionState == BackupDashboardSessionState.Completed;
+            if (_latestSessionCompleted &&
+                (!LastSuccessfulSessionStartedAtUtc.HasValue ||
+                 snapshot.StartedAtUtc >= LastSuccessfulSessionStartedAtUtc.Value))
+            {
+                LastSuccessfulSessionStartedAtUtc = snapshot.StartedAtUtc;
+            }
+            if (!HasActiveSession)
+            {
+                ActiveSessionName = string.Empty;
+            }
+            BytesPerSecond = 0;
+            _lastSpeedSampleUtc = null;
+            _lastTransferredBytes = TransferredBytes;
+            RefreshVisualStatus();
+            if (snapshot.SessionState == BackupDashboardSessionState.Failed && IsOnline)
+            {
+                ProgressMode = BackupDashboardProgressMode.Error;
+                StatusText = "LỖI BACKUP";
+            }
             return true;
         }
 
@@ -178,6 +255,7 @@ namespace AgentControl
                 LastSuccessfulSessionStartedAtUtc = startedAtUtc;
             }
             HasActiveSession = false;
+            _latestSessionCompleted = true;
             ActiveSessionName = string.Empty;
             ProgressPercentage = 100;
             CurrentFile = string.Empty;
@@ -189,6 +267,7 @@ namespace AgentControl
         public void FailSession()
         {
             HasActiveSession = false;
+            _latestSessionCompleted = false;
             ActiveSessionName = string.Empty;
             BytesPerSecond = 0;
             _lastSpeedSampleUtc = null;
@@ -239,6 +318,15 @@ namespace AgentControl
 
         private void RefreshVisualStatus()
         {
+            if (_latestSessionCompleted)
+            {
+                ProgressMode = BackupDashboardProgressMode.Waiting;
+                StatusText = Configuration == null
+                    ? "CHƯA CẤU HÌNH BACKUP"
+                    : "ĐANG CHỜ ĐẾN GIỜ BACKUP";
+                return;
+            }
+
             if (!IsOnline)
             {
                 ProgressMode = BackupDashboardProgressMode.Disconnected;

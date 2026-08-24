@@ -54,6 +54,13 @@ CREATE TABLE IF NOT EXISTS BackupSessions (
     PRIMARY KEY (AgentID, SessionName)
 );
 
+CREATE TABLE IF NOT EXISTS BackupDashboardSnapshots (
+    AgentID TEXT PRIMARY KEY,
+    SnapshotJson TEXT NOT NULL,
+    UpdatedAtUtc TEXT NOT NULL,
+    Revision INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS BackupFileInventory (
     AgentID TEXT NOT NULL,
     SourcePath TEXT NOT NULL,
@@ -72,6 +79,11 @@ CREATE TABLE IF NOT EXISTS BackupFileInventory (
                     "BackupFileInventory",
                     "ContentSha256",
                     "TEXT NOT NULL DEFAULT ''");
+                await BackupDatabase.EnsureColumnAsync(
+                    connection,
+                    "BackupDashboardSnapshots",
+                    "Revision",
+                    "INTEGER NOT NULL DEFAULT 0");
                 _initialized = true;
             }
             finally
@@ -199,6 +211,86 @@ ORDER BY CompletedAtUtc DESC;", connection);
                         out DateTime startedAtUtc))
                     {
                         result[agentId] = startedAtUtc;
+                    }
+                }
+                return result;
+            }
+            finally
+            {
+                DbLock.Release();
+            }
+        }
+
+        public static async Task SaveDashboardSnapshotAsync(BackupDashboardSnapshot snapshot)
+        {
+            if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.AgentId))
+            {
+                throw new ArgumentException("Snapshot Dashboard không hợp lệ.", nameof(snapshot));
+            }
+
+            await InitializeAsync();
+            string json = JsonSerializer.Serialize(snapshot);
+            DateTime updatedAtUtc = snapshot.UpdatedAtUtc.Kind == DateTimeKind.Utc
+                ? snapshot.UpdatedAtUtc
+                : snapshot.UpdatedAtUtc.ToUniversalTime();
+
+            await DbLock.WaitAsync();
+            try
+            {
+                using SQLiteConnection connection = await OpenConnectionAsync();
+                using SQLiteCommand command = new SQLiteCommand(@"
+INSERT INTO BackupDashboardSnapshots (AgentID, SnapshotJson, UpdatedAtUtc, Revision)
+VALUES (@AgentID, @SnapshotJson, @UpdatedAtUtc, @Revision)
+ON CONFLICT(AgentID) DO UPDATE SET
+    SnapshotJson = excluded.SnapshotJson,
+    UpdatedAtUtc = excluded.UpdatedAtUtc,
+    Revision = excluded.Revision
+WHERE excluded.Revision >= BackupDashboardSnapshots.Revision;", connection);
+                command.Parameters.AddWithValue("@AgentID", snapshot.AgentId.Trim());
+                command.Parameters.AddWithValue("@SnapshotJson", json);
+                command.Parameters.AddWithValue("@UpdatedAtUtc", updatedAtUtc.ToString("O"));
+                command.Parameters.AddWithValue("@Revision", Math.Max(0, snapshot.Revision));
+                await command.ExecuteNonQueryAsync();
+            }
+            finally
+            {
+                DbLock.Release();
+            }
+        }
+
+        public static async Task<Dictionary<string, BackupDashboardSnapshot>> GetAllDashboardSnapshotsAsync()
+        {
+            await InitializeAsync();
+            await DbLock.WaitAsync();
+            try
+            {
+                using SQLiteConnection connection = await OpenConnectionAsync();
+                using SQLiteCommand command = new SQLiteCommand(
+                    "SELECT AgentID, SnapshotJson FROM BackupDashboardSnapshots;",
+                    connection);
+                var result = new Dictionary<string, BackupDashboardSnapshot>(StringComparer.OrdinalIgnoreCase);
+                using SQLiteDataReader reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    string agentId = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+                    string json = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+                    if (string.IsNullOrWhiteSpace(agentId) || string.IsNullOrWhiteSpace(json))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        BackupDashboardSnapshot? snapshot = JsonSerializer.Deserialize<BackupDashboardSnapshot>(json);
+                        if (snapshot != null &&
+                            agentId.Equals(snapshot.AgentId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            result[agentId] = snapshot;
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        // Một snapshot hỏng không được chặn các Agent khác xuất hiện trên Dashboard.
                     }
                 }
                 return result;

@@ -60,6 +60,7 @@
             panel1 = new Panel();
             panel2 = new Panel();
             PanelHeader = new Panel();
+            pictureBox1 = new PictureBox();
             groupBox4 = new GroupBox();
             btndeleteconfigBK = new Button();
             btnrecovery = new Button();
@@ -103,7 +104,6 @@
             dashboardSpeed = new DataGridViewTextBoxColumn();
             dashboardStartedAt = new DataGridViewTextBoxColumn();
             dashboardStatus = new DataGridViewTextBoxColumn();
-            pictureBox1 = new PictureBox();
             groupBox1.SuspendLayout();
             grbchecksum.SuspendLayout();
             panelZone1.SuspendLayout();
@@ -113,6 +113,7 @@
             panel1.SuspendLayout();
             panel2.SuspendLayout();
             PanelHeader.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)pictureBox1).BeginInit();
             groupBox4.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)numericUpDown1).BeginInit();
             ((System.ComponentModel.ISupportInitialize)numericUpDown2).BeginInit();
@@ -120,7 +121,6 @@
             groupBox2.SuspendLayout();
             panel3.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)dgvDashboard).BeginInit();
-            ((System.ComponentModel.ISupportInitialize)pictureBox1).BeginInit();
             SuspendLayout();
             // 
             // groupBox1
@@ -417,6 +417,16 @@
             PanelHeader.Name = "PanelHeader";
             PanelHeader.Size = new Size(1904, 191);
             PanelHeader.TabIndex = 9;
+            // 
+            // pictureBox1
+            // 
+            pictureBox1.Image = Properties.Resources.Ncrow_Mega_Pack_1_Yahoo_Messenger_256;
+            pictureBox1.Location = new Point(12, 10);
+            pictureBox1.Name = "pictureBox1";
+            pictureBox1.Size = new Size(221, 172);
+            pictureBox1.SizeMode = PictureBoxSizeMode.Zoom;
+            pictureBox1.TabIndex = 18;
+            pictureBox1.TabStop = false;
             // 
             // groupBox4
             // 
@@ -839,16 +849,6 @@
             dashboardStatus.ReadOnly = true;
             dashboardStatus.Width = 171;
             // 
-            // pictureBox1
-            // 
-            pictureBox1.Image = Properties.Resources.Ncrow_Mega_Pack_1_Yahoo_Messenger_256;
-            pictureBox1.Location = new Point(12, 10);
-            pictureBox1.Name = "pictureBox1";
-            pictureBox1.Size = new Size(221, 172);
-            pictureBox1.SizeMode = PictureBoxSizeMode.Zoom;
-            pictureBox1.TabIndex = 18;
-            pictureBox1.TabStop = false;
-            // 
             // frmToolBackup
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
@@ -876,6 +876,7 @@
             panel2.ResumeLayout(false);
             PanelHeader.ResumeLayout(false);
             PanelHeader.PerformLayout();
+            ((System.ComponentModel.ISupportInitialize)pictureBox1).EndInit();
             groupBox4.ResumeLayout(false);
             groupBox4.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)numericUpDown1).EndInit();
@@ -885,7 +886,6 @@
             groupBox2.ResumeLayout(false);
             panel3.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)dgvDashboard).EndInit();
-            ((System.ComponentModel.ISupportInitialize)pictureBox1).EndInit();
             ResumeLayout(false);
             PerformLayout();
         }

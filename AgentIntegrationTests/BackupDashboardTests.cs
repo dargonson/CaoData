@@ -58,6 +58,98 @@ public sealed class BackupDashboardTests
     }
 
     [Fact]
+    public async Task PersistedActiveSession_RestoresLastProgressWhileAgentIsOffline()
+    {
+        string agentId = "dashboard-active-" + Guid.NewGuid().ToString("N");
+        DateTime startedAtUtc = new(2026, 8, 24, 1, 2, 3, DateTimeKind.Utc);
+        BackupProgressUpdate update = Progress(
+            agentId,
+            "FIRST-" + agentId,
+            6,
+            680,
+            640,
+            68);
+        update.StartedAtUtc = startedAtUtc;
+        update.CurrentFile = @"M:\Data\important.bin";
+        BackupDashboardSnapshot snapshot = Assert.IsType<BackupDashboardSnapshot>(
+            BackupDashboardSnapshot.FromProgress(update, startedAtUtc.AddMinutes(2)));
+
+        await BackupRepository.SaveDashboardSnapshotAsync(snapshot);
+        BackupDashboardSnapshot restored = (await BackupRepository.GetAllDashboardSnapshotsAsync())[agentId];
+        var state = ConfiguredState(agentId);
+
+        Assert.True(state.RestoreSnapshot(restored));
+        Assert.True(state.HasActiveSession);
+        Assert.Equal(68, state.ProgressPercentage);
+        Assert.Equal(680, state.ProcessedBytes);
+        Assert.Equal(640, state.TransferredBytes);
+        Assert.Equal(@"M:\Data\important.bin", state.CurrentFile);
+        Assert.Equal(startedAtUtc, state.StartedAtUtc);
+        Assert.Equal(BackupDashboardProgressMode.Disconnected, state.ProgressMode);
+        Assert.Equal("MẤT KẾT NỐI", state.StatusText);
+    }
+
+    [Fact]
+    public void RepeatedBeginForRestoredSession_DoesNotResetProgressToZero()
+    {
+        string agentId = "dashboard-resume";
+        DateTime startedAtUtc = new(2026, 8, 24, 2, 0, 0, DateTimeKind.Utc);
+        BackupProgressUpdate update = Progress(agentId, "FIRST-dashboard-resume", 5, 520, 500, 52);
+        update.StartedAtUtc = startedAtUtc;
+        BackupDashboardSnapshot snapshot = BackupDashboardSnapshot.FromProgress(update, DateTime.UtcNow)!;
+        var state = ConfiguredState(agentId);
+
+        Assert.True(state.RestoreSnapshot(snapshot));
+        Assert.True(state.StartSession(Begin(
+            agentId,
+            snapshot.SessionName,
+            snapshot.PlannedFileCount,
+            snapshot.PlannedTotalBytes,
+            startedAtUtc)));
+
+        Assert.Equal(52, state.ProgressPercentage);
+        Assert.Equal(520, state.ProcessedBytes);
+        Assert.Equal(500, state.TransferredBytes);
+        Assert.Equal(BackupDashboardProgressMode.Sending, state.ProgressMode);
+    }
+
+    [Fact]
+    public async Task OlderDashboardSnapshot_CannotOverwriteNewerStoredProgress()
+    {
+        string agentId = "dashboard-order-" + Guid.NewGuid().ToString("N");
+        DateTime startedAtUtc = new(2026, 8, 24, 3, 0, 0, DateTimeKind.Utc);
+        BackupProgressUpdate newerUpdate = Progress(agentId, "FIRST-" + agentId, 8, 800, 800, 80);
+        newerUpdate.StartedAtUtc = startedAtUtc;
+        BackupProgressUpdate olderUpdate = Progress(agentId, "FIRST-" + agentId, 2, 200, 200, 20);
+        olderUpdate.StartedAtUtc = startedAtUtc;
+
+        await BackupRepository.SaveDashboardSnapshotAsync(
+            BackupDashboardSnapshot.FromProgress(newerUpdate, startedAtUtc.AddMinutes(2))!);
+        await BackupRepository.SaveDashboardSnapshotAsync(
+            BackupDashboardSnapshot.FromProgress(olderUpdate, startedAtUtc.AddMinutes(1))!);
+
+        BackupDashboardSnapshot stored = (await BackupRepository.GetAllDashboardSnapshotsAsync())[agentId];
+        Assert.Equal(80, stored.ProgressPercentage);
+        Assert.Equal(800, stored.ProcessedBytes);
+    }
+
+    [Fact]
+    public void SnapshotRevision_StillMovesForwardWhenWindowsClockMovesBackward()
+    {
+        DateTime newerClock = new(2026, 8, 26, 0, 0, 0, DateTimeKind.Utc);
+        DateTime rolledBackClock = new(2026, 8, 24, 0, 0, 0, DateTimeKind.Utc);
+        BackupDashboardSnapshot snapshot = BackupDashboardSnapshot.FromBegin(
+            Begin("agent-clock", "FIRST-agent-clock", 1, 100, newerClock),
+            newerClock) !;
+        long previousRevision = snapshot.Revision;
+
+        snapshot.Touch(rolledBackClock);
+
+        Assert.True(snapshot.Revision > previousRevision);
+        Assert.Equal(rolledBackClock, snapshot.UpdatedAtUtc);
+    }
+
+    [Fact]
     public void Completion_UsesSessionStartDate_NotLateCompletionDate()
     {
         DateTime sessionStartUtc = new DateTime(2026, 8, 23, 12, 0, 0, DateTimeKind.Local).ToUniversalTime();
@@ -70,6 +162,53 @@ public sealed class BackupDashboardTests
         Assert.Equal(BackupDashboardProgressMode.Waiting, state.ProgressMode);
         Assert.Equal("ĐANG CHỜ ĐẾN GIỜ BACKUP", state.StatusText);
         Assert.Equal("HOÀN THÀNH 2026-08-23", state.ProgressDisplayText);
+    }
+
+    [Fact]
+    public async Task PersistedCompletedSession_ShowsCompletionBeforeAgentReconnects()
+    {
+        string agentId = "agent-completed-offline-" + Guid.NewGuid().ToString("N");
+        DateTime sessionStartUtc = new DateTime(2026, 8, 23, 12, 0, 0, DateTimeKind.Local)
+            .ToUniversalTime();
+        BackupDashboardSnapshot active = BackupDashboardSnapshot.FromBegin(
+            Begin(agentId, "FIRST-agent-completed-offline", 10, 1_000, sessionStartUtc),
+            sessionStartUtc)!;
+        BackupDashboardSnapshot completed = active.Finish(
+            BackupDashboardSessionState.Completed,
+            sessionStartUtc.AddMinutes(5));
+        await BackupRepository.SaveDashboardSnapshotAsync(completed);
+        BackupDashboardSnapshot restored =
+            (await BackupRepository.GetAllDashboardSnapshotsAsync())[agentId];
+        var state = ConfiguredState(agentId);
+
+        Assert.True(state.RestoreSnapshot(restored));
+
+        Assert.False(state.IsOnline);
+        Assert.False(state.HasActiveSession);
+        Assert.Equal(BackupDashboardProgressMode.Waiting, state.ProgressMode);
+        Assert.Equal("ĐANG CHỜ ĐẾN GIỜ BACKUP", state.StatusText);
+        Assert.Equal("HOÀN THÀNH 2026-08-23", state.ProgressDisplayText);
+    }
+
+    [Fact]
+    public void OlderSuccessfulSession_DoesNotHideNewerOfflineFailure()
+    {
+        string agentId = "agent-failed-offline";
+        DateTime successfulStartUtc = new(2026, 8, 22, 1, 0, 0, DateTimeKind.Utc);
+        DateTime failedStartUtc = successfulStartUtc.AddDays(1);
+        BackupDashboardSnapshot failed = BackupDashboardSnapshot.FromBegin(
+            Begin(agentId, "INC-agent-failed-offline", 10, 1_000, failedStartUtc),
+            failedStartUtc)!.Finish(
+                BackupDashboardSessionState.Failed,
+                failedStartUtc.AddMinutes(5));
+        var state = ConfiguredState(agentId);
+
+        Assert.True(state.RestoreSnapshot(failed));
+        state.SetLastSuccessfulSession(successfulStartUtc);
+
+        Assert.Equal(BackupDashboardProgressMode.Disconnected, state.ProgressMode);
+        Assert.Equal("MẤT KẾT NỐI", state.StatusText);
+        Assert.Equal("0%", state.ProgressDisplayText);
     }
 
     [Fact]
