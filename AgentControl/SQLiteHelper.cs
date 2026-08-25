@@ -10,9 +10,20 @@ namespace AgentControl
 {
     public class SQLiteHelper
     {
-        // Tên file database SQLite sẽ nằm chung thư mục chạy của app Server
-        private static readonly string DbName = "AgentManagement.db";
-        private static readonly string ConnectionString = $"Data Source={DbName};Version=3;Default Timeout=30;BusyTimeout=5000;";
+        // Du lieu Control phai on dinh, khong phu thuoc working directory cua shortcut/service.
+        private static string ConnectionString
+        {
+            get
+            {
+                var builder = new SQLiteConnectionStringBuilder
+                {
+                    DataSource = ControlDataPaths.GetDatabasePath("AgentManagement.db"),
+                    Version = 3,
+                    DefaultTimeout = 30
+                };
+                return builder.ConnectionString + ";BusyTimeout=5000;";
+            }
+        }
         private static readonly SemaphoreSlim DbLock = new SemaphoreSlim(1, 1);
 
         private static async Task<SQLiteConnection> OpenConnectionAsync()
@@ -247,6 +258,26 @@ namespace AgentControl
             }
         }
 
+        public static async Task TouchAgentAsync(string agentID)
+        {
+            await DbLock.WaitAsync();
+            try
+            {
+                using SQLiteConnection connection = await OpenConnectionAsync();
+                using SQLiteCommand command = new SQLiteCommand(@"
+UPDATE Agents
+SET LastSeen = @LastSeen, Status = 'Online'
+WHERE AgentID = @AgentID;", connection);
+                command.Parameters.AddWithValue("@AgentID", agentID);
+                command.Parameters.AddWithValue("@LastSeen", DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss"));
+                await command.ExecuteNonQueryAsync();
+            }
+            finally
+            {
+                DbLock.Release();
+            }
+        }
+
         public static async Task DeleteAgentAsync(string agentID)
         {
             await DbLock.WaitAsync();
@@ -286,16 +317,16 @@ namespace AgentControl
                         {
                             var row = new Dictionary<string, string>
                             {
-                                { "AgentID", reader["AgentID"].ToString() },
-                                { "MachineName", reader["MachineName"].ToString() },
-                                { "Username", reader["Username"].ToString() },
-                                { "IPAddress", reader["IPAddress"].ToString() },
-                                { "OSVersion", reader["OSVersion"].ToString() },
-                                { "AgentVersion", reader["AgentVersion"].ToString() },
-                                { "OwnerName", reader["OwnerName"].ToString() },
-                                { "FirstConnectTime", reader["FirstConnectTime"].ToString() },
-                                { "LastSeen", reader["LastSeen"].ToString() },
-                                { "Status", reader["Status"].ToString() }
+                                { "AgentID", Convert.ToString(reader["AgentID"]) ?? string.Empty },
+                                { "MachineName", Convert.ToString(reader["MachineName"]) ?? string.Empty },
+                                { "Username", Convert.ToString(reader["Username"]) ?? string.Empty },
+                                { "IPAddress", Convert.ToString(reader["IPAddress"]) ?? string.Empty },
+                                { "OSVersion", Convert.ToString(reader["OSVersion"]) ?? string.Empty },
+                                { "AgentVersion", Convert.ToString(reader["AgentVersion"]) ?? string.Empty },
+                                { "OwnerName", Convert.ToString(reader["OwnerName"]) ?? string.Empty },
+                                { "FirstConnectTime", Convert.ToString(reader["FirstConnectTime"]) ?? string.Empty },
+                                { "LastSeen", Convert.ToString(reader["LastSeen"]) ?? string.Empty },
+                                { "Status", Convert.ToString(reader["Status"]) ?? string.Empty }
                             };
                             agentList.Add(row);
                         }
@@ -452,9 +483,52 @@ namespace AgentControl
                     {
                         cmd.Parameters.AddWithValue("@DownloadID", downloadId);
                         var result = await cmd.ExecuteScalarAsync();
-                        return result != null ? result.ToString() : string.Empty;
+                        return Convert.ToString(result) ?? string.Empty;
                     }
                 }
+            }
+            finally
+            {
+                DbLock.Release();
+            }
+        }
+
+        public static async Task<bool> IsDownloadOwnedByAgentAsync(string downloadId, string agentId)
+        {
+            await DbLock.WaitAsync();
+            try
+            {
+                using SQLiteConnection connection = await OpenConnectionAsync();
+                using SQLiteCommand command = new SQLiteCommand(@"
+SELECT COUNT(1) FROM DownloadQueue
+WHERE DownloadID = @DownloadID AND AgentID = @AgentID;", connection);
+                command.Parameters.AddWithValue("@DownloadID", downloadId);
+                command.Parameters.AddWithValue("@AgentID", agentId);
+                return Convert.ToInt32(await command.ExecuteScalarAsync()) == 1;
+            }
+            finally
+            {
+                DbLock.Release();
+            }
+        }
+
+        public static async Task SetDownloadProgressExactAsync(string downloadId, long downloadedBytes, string status)
+        {
+            await DbLock.WaitAsync();
+            try
+            {
+                using SQLiteConnection connection = await OpenConnectionAsync();
+                using SQLiteCommand command = new SQLiteCommand(@"
+UPDATE DownloadQueue
+SET DownloadedBytes = @DownloadedBytes,
+    Status = @Status,
+    UpdatedTime = @Time
+WHERE DownloadID = @DownloadID;", connection);
+                command.Parameters.AddWithValue("@DownloadID", downloadId);
+                command.Parameters.AddWithValue("@DownloadedBytes", Math.Max(0, downloadedBytes));
+                command.Parameters.AddWithValue("@Status", status);
+                command.Parameters.AddWithValue("@Time", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                await command.ExecuteNonQueryAsync();
             }
             finally
             {
@@ -612,7 +686,7 @@ namespace AgentControl
                 {
 
                     string selectQuery = @"
-            SELECT DownloadID, RemotePath, DownloadedBytes, ChecksumAlgorithm
+            SELECT DownloadID, RemotePath, LocalPath, TotalBytes, DownloadedBytes, Status, ChecksumAlgorithm
             FROM DownloadQueue
             WHERE AgentID = @AgentID
               AND Status IN ('Waiting Agent', 'Downloading', 'Waiting', 'Verifying')
@@ -627,11 +701,12 @@ namespace AgentControl
                             {
                                 pendingJobs.Add(new DownloadJobDto
                                 {
-                                    DownloadID = reader["DownloadID"].ToString(),
-                                    RemotePath = reader["RemotePath"].ToString(),
-
-                                    // 🔥 SỬA TẠI ĐÂY: Đổi từ 'Offset' thành 'DownloadedBytes' cho đúng thuộc tính của Class
+                                    DownloadID = reader["DownloadID"]?.ToString() ?? string.Empty,
+                                    RemotePath = reader["RemotePath"]?.ToString() ?? string.Empty,
+                                    LocalPath = reader["LocalPath"]?.ToString() ?? string.Empty,
+                                    TotalBytes = Convert.ToInt64(reader["TotalBytes"]),
                                     DownloadedBytes = Convert.ToInt64(reader["DownloadedBytes"]),
+                                    Status = reader["Status"]?.ToString() ?? string.Empty,
                                     ChecksumAlgorithm = reader["ChecksumAlgorithm"]?.ToString() ?? "None"
                                 });
                             }
@@ -696,13 +771,13 @@ namespace AgentControl
                             {
                                 list.Add(new DownloadJobDto
                                 {
-                                    DownloadID = reader["DownloadID"].ToString(),
-                                    RemotePath = reader["RemotePath"].ToString(),
-                                    LocalPath = reader["LocalPath"].ToString(),
+                                    DownloadID = Convert.ToString(reader["DownloadID"]) ?? string.Empty,
+                                    RemotePath = Convert.ToString(reader["RemotePath"]) ?? string.Empty,
+                                    LocalPath = Convert.ToString(reader["LocalPath"]) ?? string.Empty,
                                     // Ép kiểu chính xác sang long cho dung lượng và tiến độ
                                     TotalBytes = reader["TotalBytes"] != DBNull.Value ? Convert.ToInt64(reader["TotalBytes"]) : 0,
                                     DownloadedBytes = reader["DownloadedBytes"] != DBNull.Value ? Convert.ToInt64(reader["DownloadedBytes"]) : 0,
-                                    Status = reader["Status"].ToString(),
+                                    Status = Convert.ToString(reader["Status"]) ?? string.Empty,
                                     ChecksumAlgorithm = reader["ChecksumAlgorithm"]?.ToString() ?? "None"
                                 });
                             }

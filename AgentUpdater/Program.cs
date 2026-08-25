@@ -21,7 +21,12 @@ namespace AgentUpdater
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
                 options = UpdateOptions.Parse(args);
-                reporter = new UpdateStatusReporter(options.AgentId, options.SessionId, options.ControlHost, options.ControlPort);
+                reporter = new UpdateStatusReporter(
+                    options.AgentId,
+                    options.SessionId,
+                    options.ControlHost,
+                    options.ControlPort,
+                    options.SecurityConfig);
                 await LogAsync(logPath, "Bắt đầu update AgentServices.");
                 await SendStatusAsync(reporter, logPath, "UpdaterStarted", "AgentUpdater đã khởi động. Thông báo này được gửi từ AgentUpdater.");
 
@@ -33,43 +38,40 @@ namespace AgentUpdater
 
                 Directory.CreateDirectory(options.BackupDirectory);
                 string backupPath = Path.Combine(options.BackupDirectory, Path.GetFileName(options.CurrentExe) + ".bak");
-
-                await SendStatusAsync(reporter, logPath, "StoppingService", "Chuẩn bị tắt AgentServices.");
-                await RunScAsync("stop", options.ServiceName, logPath);
-                await WaitUntilFileUnlockedAsync(options.CurrentExe, logPath);
-                await SendStatusAsync(reporter, logPath, "ServiceStopped", "Đã tắt thành công.");
-
-                File.Copy(options.CurrentExe, backupPath, true);
-                await LogAsync(logPath, "Đã backup: " + backupPath);
-
-                try
-                {
-                    await SendStatusAsync(reporter, logPath, "UpdatingFile", "Chuẩn bị update file mới.");
-                    File.Copy(options.NewExe, options.CurrentExe, true);
-                    await LogAsync(logPath, "Đã copy file mới vào: " + options.CurrentExe);
-                    await SendStatusAsync(reporter, logPath, "FileUpdated", "Đã update file mới.");
-                }
-                catch
-                {
-                    if (File.Exists(backupPath))
+                await AgentUpdateWorkflow.ExecuteAsync(
+                    options.CurrentExe,
+                    options.NewExe,
+                    backupPath,
+                    new AgentUpdateWorkflowOperations
                     {
-                        File.Copy(backupPath, options.CurrentExe, true);
-                        await LogAsync(logPath, "Đã rollback file cũ.");
-                    }
+                        StopServiceAsync = () => RunScAsync("stop", options.ServiceName, logPath),
+                        TryStopServiceAsync = () => TryRunScAsync("stop", options.ServiceName, logPath),
+                        WaitUntilUnlockedAsync = () => WaitUntilFileUnlockedAsync(options.CurrentExe, logPath),
+                        StartAndVerifyServiceAsync = async () =>
+                        {
+                            await RunScAsync("start", options.ServiceName, logPath);
+                            await WaitForServiceRunningAsync(options.ServiceName, logPath);
+                        },
+                        EnsureServiceRunningAsync = () => EnsureServiceRunningAsync(options.ServiceName, logPath),
+                        WriteCompletionMarkerAsync = () => WriteCompletionMarkerAsync(options),
+                        DeleteCompletionMarkerAsync = () => TryDeleteCompletionMarkerAsync(logPath),
+                        CopyFileAsync = (source, destination, overwrite) =>
+                        {
+                            File.Copy(source, destination, overwrite);
+                            return Task.CompletedTask;
+                        },
+                        ReportStatusAsync = (status, message) =>
+                            SendStatusAsync(reporter, logPath, status, message),
+                        LogAsync = message => LogAsync(logPath, message)
+                    });
 
-                    throw;
-                }
-
-                await WriteCompletionMarkerAsync(options);
-                await SendStatusAsync(reporter, logPath, "StartingService", "Khởi động lại services......");
-                await RunScAsync("start", options.ServiceName, logPath);
-                await SendStatusAsync(reporter, logPath, "ServiceStarted", "Khởi động thành công...");
-                await SendStatusAsync(reporter, logPath, "WaitingAgent", "Đang chờ AgentServices kết nối đến Control.");
-                await SendStatusAsync(reporter, logPath, "ControlConnected", "Đã kết nối thành công đến Control.");
-
+                /*
+                 * Khong gui them status qua updater sau khi start: AgentServices moi se doc
+                 * marker va tu gui Completed sau khi no thuc su dang ky lai voi Control.
+                 */
                 for (int i = 5; i >= 1; i--)
                 {
-                    await SendStatusAsync(reporter, logPath, "ExitCountdown", $"AgentUpdater sẽ thoát trong {i}s.");
+                    await LogAsync(logPath, $"AgentUpdater sẽ thoát trong {i}s.");
                     await Task.Delay(1000);
                 }
 
@@ -105,7 +107,38 @@ namespace AgentUpdater
             };
 
             Directory.CreateDirectory(Path.GetDirectoryName(markerPath)!);
-            await File.WriteAllTextAsync(markerPath, JsonSerializer.Serialize(marker, new JsonSerializerOptions { WriteIndented = true }));
+            string temporaryPath = markerPath + ".tmp";
+            await using (FileStream destination = new FileStream(
+                temporaryPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                16 * 1024,
+                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await JsonSerializer.SerializeAsync(
+                    destination,
+                    marker,
+                    new JsonSerializerOptions { WriteIndented = true });
+                await destination.FlushAsync();
+                destination.Flush(flushToDisk: true);
+            }
+            File.Move(temporaryPath, markerPath, overwrite: true);
+        }
+
+        private static async Task TryDeleteCompletionMarkerAsync(string logPath)
+        {
+            try
+            {
+                string markerPath = AppVersion.GetAgentUpdateCompletionMarkerPath();
+                if (File.Exists(markerPath)) File.Delete(markerPath);
+                string temporaryPath = markerPath + ".tmp";
+                if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+            }
+            catch (Exception ex)
+            {
+                await LogAsync(logPath, "Không xóa được completion marker khi rollback: " + ex.Message);
+            }
         }
 
         private static async Task RunScAsync(string command, string serviceName, string logPath)
@@ -130,6 +163,96 @@ namespace AgentUpdater
             {
                 throw new InvalidOperationException($"sc {command} {serviceName} thất bại. ExitCode={process.ExitCode}. {output} {error}");
             }
+        }
+
+        private static async Task TryRunScAsync(string command, string serviceName, string logPath)
+        {
+            try
+            {
+                await RunScAsync(command, serviceName, logPath);
+            }
+            catch (Exception ex)
+            {
+                await LogAsync(logPath, $"Bỏ qua lỗi sc {command} khi rollback: {ex.Message}");
+            }
+        }
+
+        private static async Task EnsureServiceRunningAsync(string serviceName, string logPath)
+        {
+            if (!await IsServiceRunningAsync(serviceName, logPath))
+            {
+                try
+                {
+                    await RunScAsync("start", serviceName, logPath);
+                }
+                catch (Exception startError)
+                {
+                    // Service co the vua duoc Windows/SCM tu khoi dong trong luc query.
+                    if (!await IsServiceRunningAsync(serviceName, logPath))
+                    {
+                        throw new InvalidOperationException(
+                            "Không thể khởi động lại AgentServices sau rollback.",
+                            startError);
+                    }
+                }
+            }
+
+            await WaitForServiceRunningAsync(serviceName, logPath);
+        }
+
+        private static async Task<bool> IsServiceRunningAsync(string serviceName, string logPath)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "sc.exe",
+                Arguments = $"query \"{serviceName}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            using Process process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Không chạy được sc.exe query.");
+            string output = await process.StandardOutput.ReadToEndAsync();
+            string error = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            await LogAsync(logPath, $"sc query exit={process.ExitCode} output={output.Trim()} error={error.Trim()}");
+            return process.ExitCode == 0 &&
+                   output.Contains("RUNNING", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static async Task WaitForServiceRunningAsync(string serviceName, string logPath)
+        {
+            DateTime deadline = DateTime.UtcNow.AddSeconds(MaxWaitSeconds);
+            while (DateTime.UtcNow < deadline)
+            {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = "sc.exe",
+                    Arguments = $"query \"{serviceName}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+
+                using Process process = Process.Start(startInfo)
+                    ?? throw new InvalidOperationException("Không chạy được sc.exe query.");
+                string output = await process.StandardOutput.ReadToEndAsync();
+                string error = await process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                if (process.ExitCode == 0 &&
+                    output.Contains("RUNNING", StringComparison.OrdinalIgnoreCase))
+                {
+                    await LogAsync(logPath, "Service đã xác nhận trạng thái RUNNING.");
+                    return;
+                }
+
+                await Task.Delay(RetryDelayMs);
+            }
+
+            throw new TimeoutException($"Service {serviceName} không đạt trạng thái RUNNING sau {MaxWaitSeconds} giây.");
         }
 
         private static async Task WaitUntilFileUnlockedAsync(string filePath, string logPath)
@@ -181,6 +304,7 @@ namespace AgentUpdater
             public string SessionId { get; private set; } = string.Empty;
             public string ControlHost { get; private set; } = string.Empty;
             public int ControlPort { get; private set; }
+            public string SecurityConfig { get; private set; } = string.Empty;
 
             public static UpdateOptions Parse(string[] args)
             {
@@ -208,8 +332,14 @@ namespace AgentUpdater
                     AgentId = GetRequired(values, "agent-id"),
                     SessionId = GetRequired(values, "session-id"),
                     ControlHost = GetRequired(values, "control-host"),
-                    ControlPort = int.TryParse(Get(values, "control-port", "9000"), out int port) ? port : 9000
+                    ControlPort = int.TryParse(Get(values, "control-port", "9000"), out int port) ? port : 9000,
+                    SecurityConfig = GetRequired(values, "security-config")
                 };
+
+                options.CurrentExe = Path.GetFullPath(options.CurrentExe);
+                options.NewExe = Path.GetFullPath(options.NewExe);
+                options.BackupDirectory = Path.GetFullPath(options.BackupDirectory);
+                options.SecurityConfig = Path.GetFullPath(options.SecurityConfig);
 
                 if (!File.Exists(options.CurrentExe))
                 {
@@ -219,9 +349,33 @@ namespace AgentUpdater
                 {
                     throw new FileNotFoundException("Không tìm thấy AgentServices.exe mới.", options.NewExe);
                 }
+                if (options.CurrentExe.Equals(options.NewExe, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new ArgumentException("File AgentServices mới phải nằm ngoài đường dẫn EXE đang chạy.");
+                }
+                if (!IsSha256(options.ExpectedSha256))
+                {
+                    throw new ArgumentException("--expected-sha256 không hợp lệ.");
+                }
+                if (options.ControlPort is < 1 or > 65535)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(options.ControlPort),
+                        options.ControlPort,
+                        "Port Control không hợp lệ.");
+                }
+                if (string.IsNullOrWhiteSpace(options.ServiceName) ||
+                    options.ServiceName.Any(char.IsControl) ||
+                    options.ServiceName.Contains('"'))
+                {
+                    throw new ArgumentException("--service-name không hợp lệ.");
+                }
 
                 return options;
             }
+
+            private static bool IsSha256(string value) =>
+                value != null && value.Length == 64 && value.All(Uri.IsHexDigit);
 
             private static string Get(Dictionary<string, string> values, string key, string defaultValue)
             {
@@ -248,13 +402,15 @@ namespace AgentUpdater
             private readonly string _sessionId;
             private readonly string _host;
             private readonly int _port;
+            private readonly string _sharedKey;
 
-            public UpdateStatusReporter(string agentId, string sessionId, string host, int port)
+            public UpdateStatusReporter(string agentId, string sessionId, string host, int port, string securityConfig)
             {
                 _agentId = agentId;
                 _sessionId = sessionId;
                 _host = host;
                 _port = port;
+                _sharedKey = LoadSharedKey(securityConfig);
             }
 
             public async Task SendAsync(string status, string message)
@@ -287,12 +443,40 @@ namespace AgentUpdater
                         Data = JsonSerializer.Serialize(updateStatus)
                     };
 
-                    await TransferFrameProtocol.WriteJsonPacketAsync(client.GetStream(), packet, timeoutCts.Token);
+                    using Stream secureStream = await SecureTransport.AuthenticateClientAsync(
+                        client.GetStream(),
+                        _host,
+                        _agentId,
+                        _sharedKey,
+                        timeoutCts.Token);
+                    await TransferFrameProtocol.WriteJsonPacketAsync(secureStream, packet, timeoutCts.Token);
                 }
                 catch
                 {
                     // Update must continue even if Control cannot receive a progress line.
                 }
+            }
+
+            private static string LoadSharedKey(string securityConfig)
+            {
+                string key = Environment.GetEnvironmentVariable("CAODATA_SHARED_KEY") ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(key) && File.Exists(securityConfig))
+                {
+                    using JsonDocument document = JsonDocument.Parse(File.ReadAllText(securityConfig));
+                    if (document.RootElement.TryGetProperty("ConnectionConfig", out JsonElement section) &&
+                        section.TryGetProperty("SharedKey", out JsonElement keyElement))
+                    {
+                        key = keyElement.GetString() ?? string.Empty;
+                    }
+                }
+
+                key = key.Trim();
+                if (key.Length < 32)
+                {
+                    throw new InvalidOperationException("Không đọc được SharedKey cho AgentUpdater.");
+                }
+
+                return key;
             }
         }
     }

@@ -76,6 +76,7 @@ namespace AgentShared
         public string ErrorMessage { get; set; } = string.Empty;
         public long DownloadedBytes { get; set; }
         public long TotalBytes { get; set; }
+        public bool ResetRequired { get; set; }
     }
 
     public class RemoteFolderFilesRequest
@@ -90,6 +91,8 @@ namespace AgentShared
         public string RemoteRootPath { get; set; } = string.Empty;
         public List<RemoteFolderFileEntry> Files { get; set; } = new List<RemoteFolderFileEntry>();
         public List<string> Errors { get; set; } = new List<string>();
+        public int PageNumber { get; set; }
+        public bool IsFinalPage { get; set; } = true;
     }
 
     public class RemoteFolderFileEntry

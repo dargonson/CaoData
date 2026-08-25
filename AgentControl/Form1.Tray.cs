@@ -60,6 +60,8 @@ namespace AgentControl
 
         private void frmToolBackup_FormClosedTrayCleanup(object? sender, FormClosedEventArgs e)
         {
+            DisposeControlRuntime();
+
             if (_controlTrayIcon != null)
             {
                 _controlTrayIcon.Visible = false;

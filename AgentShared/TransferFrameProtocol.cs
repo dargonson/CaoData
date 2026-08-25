@@ -10,6 +10,11 @@ namespace AgentShared
 {
     public static class TransferFrameProtocol
     {
+        // BO SUNG BAO MAT GIAO THUC: gioi han frame de peer loi/gia mao khong the
+        // yeu cau Control/Agent cap phat mot buffer tuy y va lam can RAM.
+        public const int MaxFrameSize = 16 * 1024 * 1024;
+        public const int MaxBinaryHeaderSize = 1024 * 1024;
+        public const int MaxBinaryBodySize = 8 * 1024 * 1024;
         public const byte BinaryDownloadChunkMarker = 0x02;
         public const byte BinaryUploadChunkMarker = 0x03;
         // BO SUNG MODULE BACKUP: marker rieng, khong dung chung luong download/upload.
@@ -23,6 +28,7 @@ namespace AgentShared
         public static async Task WriteJsonPacketAsync(Stream stream, SocketPacket packet, CancellationToken token = default)
         {
             byte[] dataBytes = JsonSerializer.SerializeToUtf8Bytes(packet);
+            ValidateFrameSize(dataBytes.Length);
             byte[] sizeBytes = BitConverter.GetBytes(dataBytes.Length);
 
             await stream.WriteAsync(sizeBytes, 0, sizeBytes.Length, token);
@@ -62,10 +68,15 @@ namespace AgentShared
             {
                 throw new ArgumentOutOfRangeException(nameof(count));
             }
+            if (count > MaxBinaryBodySize)
+            {
+                throw new InvalidDataException($"Binary backup chunk vuot qua {MaxBinaryBodySize} bytes.");
+            }
 
             header.ChunkSize = count;
             byte[] headerBytes = JsonSerializer.SerializeToUtf8Bytes(header);
             int frameSize = BinaryHeaderPrefixSize + headerBytes.Length + count;
+            ValidateBinaryFrame(frameSize, headerBytes.Length, count);
 
             await stream.WriteAsync(BitConverter.GetBytes(frameSize), token);
             await stream.WriteAsync(BinaryBackupChunkMarkerBytes, token);
@@ -92,12 +103,17 @@ namespace AgentShared
             {
                 throw new ArgumentOutOfRangeException(nameof(count));
             }
+            if (count > MaxBinaryBodySize)
+            {
+                throw new InvalidDataException($"Binary chunk vuot qua {MaxBinaryBodySize} bytes.");
+            }
 
             header.ChunkSize = count;
             header.Base64Data = string.Empty;
 
             byte[] headerBytes = JsonSerializer.SerializeToUtf8Bytes(header);
             int frameSize = BinaryHeaderPrefixSize + headerBytes.Length + count;
+            ValidateBinaryFrame(frameSize, headerBytes.Length, count);
             byte[] frameSizeBytes = BitConverter.GetBytes(frameSize);
             byte[] headerSizeBytes = BitConverter.GetBytes(headerBytes.Length);
 
@@ -142,6 +158,7 @@ namespace AgentShared
 
         public static SocketPacket DeserializeJsonFrame(byte firstByte, byte[] rentedBuffer, int frameSize)
         {
+            ValidateFrameSize(frameSize);
             rentedBuffer[0] = firstByte;
             string json = Encoding.UTF8.GetString(rentedBuffer, 0, frameSize);
             return JsonSerializer.Deserialize<SocketPacket>(json) ?? new SocketPacket();
@@ -149,6 +166,7 @@ namespace AgentShared
 
         public static async Task<(FileChunkPacket Header, int BodySize)> ReadBinaryChunkHeaderAsync(Stream stream, int frameSize, CancellationToken token = default)
         {
+            ValidateFrameSize(frameSize);
             if (frameSize < BinaryHeaderPrefixSize)
             {
                 throw new InvalidDataException("Invalid binary download frame.");
@@ -159,9 +177,15 @@ namespace AgentShared
 
             int headerSize = BitConverter.ToInt32(headerSizeBytes, 0);
             int maxHeaderSize = frameSize - BinaryHeaderPrefixSize;
-            if (headerSize < 0 || headerSize > maxHeaderSize)
+            if (headerSize < 0 || headerSize > maxHeaderSize || headerSize > MaxBinaryHeaderSize)
             {
                 throw new InvalidDataException("Invalid binary download header size.");
+            }
+
+            int bodySize = maxHeaderSize - headerSize;
+            if (bodySize < 0 || bodySize > MaxBinaryBodySize)
+            {
+                throw new InvalidDataException("Invalid binary download body size.");
             }
 
             byte[] headerBytes = ArrayPool<byte>.Shared.Rent(headerSize);
@@ -169,7 +193,7 @@ namespace AgentShared
             {
                 await ReadExactAsync(stream, headerBytes, 0, headerSize, token);
                 FileChunkPacket header = JsonSerializer.Deserialize<FileChunkPacket>(headerBytes.AsSpan(0, headerSize)) ?? new FileChunkPacket();
-                return (header, maxHeaderSize - headerSize);
+                return (header, bodySize);
             }
             finally
             {
@@ -183,6 +207,7 @@ namespace AgentShared
             int frameSize,
             CancellationToken token = default)
         {
+            ValidateFrameSize(frameSize);
             if (frameSize < BinaryHeaderPrefixSize)
             {
                 throw new InvalidDataException("Invalid binary backup frame.");
@@ -193,9 +218,15 @@ namespace AgentShared
 
             int headerSize = BitConverter.ToInt32(headerSizeBytes, 0);
             int maxHeaderSize = frameSize - BinaryHeaderPrefixSize;
-            if (headerSize < 0 || headerSize > maxHeaderSize)
+            if (headerSize < 0 || headerSize > maxHeaderSize || headerSize > MaxBinaryHeaderSize)
             {
                 throw new InvalidDataException("Invalid binary backup header size.");
+            }
+
+            int bodySize = maxHeaderSize - headerSize;
+            if (bodySize < 0 || bodySize > MaxBinaryBodySize)
+            {
+                throw new InvalidDataException("Invalid binary backup body size.");
             }
 
             byte[] headerBytes = ArrayPool<byte>.Shared.Rent(headerSize);
@@ -204,7 +235,7 @@ namespace AgentShared
                 await ReadExactAsync(stream, headerBytes, 0, headerSize, token);
                 BackupFileChunkHeader header = JsonSerializer.Deserialize<BackupFileChunkHeader>(headerBytes.AsSpan(0, headerSize))
                     ?? new BackupFileChunkHeader();
-                return (header, maxHeaderSize - headerSize);
+                return (header, bodySize);
             }
             finally
             {
@@ -258,6 +289,28 @@ namespace AgentShared
             finally
             {
                 ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+
+        public static void ValidateFrameSize(int frameSize)
+        {
+            if (frameSize <= 0 || frameSize > MaxFrameSize)
+            {
+                throw new InvalidDataException(
+                    $"Invalid frame size: {frameSize}. Maximum is {MaxFrameSize} bytes.");
+            }
+        }
+
+        private static void ValidateBinaryFrame(int frameSize, int headerSize, int bodySize)
+        {
+            ValidateFrameSize(frameSize);
+            if (headerSize < 0 || headerSize > MaxBinaryHeaderSize)
+            {
+                throw new InvalidDataException("Binary header is too large.");
+            }
+            if (bodySize < 0 || bodySize > MaxBinaryBodySize)
+            {
+                throw new InvalidDataException("Binary body is too large.");
             }
         }
     }

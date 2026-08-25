@@ -15,7 +15,7 @@ namespace AgentService
             HashSet<string> visitedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             List<string> excludedFolders = config.ExcludedFolders
                 .Where(value => !string.IsNullOrWhiteSpace(value))
-                .Select(NormalizePath)
+                .Select(value => IsSimpleFolderName(value) ? value.Trim() : NormalizePath(value))
                 .ToList();
 
             foreach (string sourceValue in config.SourcePaths)
@@ -28,7 +28,7 @@ namespace AgentService
 
                 if (IsSystemDriveRoot(source))
                 {
-                    result.Errors.Add("Bỏ qua toàn bộ ổ C: theo cấu hình an toàn.");
+                    result.AddError("Bỏ qua toàn bộ ổ C: theo cấu hình an toàn.");
                     continue;
                 }
 
@@ -40,16 +40,21 @@ namespace AgentService
                     }
                     else if (Directory.Exists(source))
                     {
+                        if ((File.GetAttributes(source) & FileAttributes.ReparsePoint) != 0)
+                        {
+                            result.AddError($"Bỏ qua nguồn là junction/symbolic link: {source}");
+                            continue;
+                        }
                         ScanDirectory(source, excludedFolders, config.ExcludedPatterns, visitedFiles, result);
                     }
                     else
                     {
-                        result.Errors.Add($"Nguồn backup không tồn tại: {source}");
+                        result.AddError($"Nguồn backup không tồn tại: {source}");
                     }
                 }
                 catch (Exception ex)
                 {
-                    result.Errors.Add($"{source}: {ex.Message}");
+                    result.AddError($"{source}: {ex.Message}");
                 }
             }
 
@@ -83,7 +88,7 @@ namespace AgentService
                 }
                 catch (Exception ex)
                 {
-                    result.Errors.Add($"Không đọc được file trong {current}: {ex.Message}");
+                    result.AddError($"Không đọc được file trong {current}: {ex.Message}");
                 }
 
                 try
@@ -100,7 +105,7 @@ namespace AgentService
                         }
                         catch (Exception ex)
                         {
-                            result.Errors.Add($"Không đọc được thuộc tính {directory}: {ex.Message}");
+                            result.AddError($"Không đọc được thuộc tính {directory}: {ex.Message}");
                             continue;
                         }
 
@@ -112,7 +117,7 @@ namespace AgentService
                 }
                 catch (Exception ex)
                 {
-                    result.Errors.Add($"Không đọc được thư mục con trong {current}: {ex.Message}");
+                    result.AddError($"Không đọc được thư mục con trong {current}: {ex.Message}");
                 }
             }
         }
@@ -132,6 +137,10 @@ namespace AgentService
             try
             {
                 FileInfo info = new FileInfo(fullPath);
+                if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    return;
+                }
                 result.Files[fullPath] = new BackupFileSnapshot
                 {
                     FullPath = fullPath,
@@ -142,7 +151,7 @@ namespace AgentService
             }
             catch (Exception ex)
             {
-                result.Errors.Add($"Không đọc được file {fullPath}: {ex.Message}");
+                result.AddError($"Không đọc được file {fullPath}: {ex.Message}");
             }
         }
 
@@ -161,6 +170,15 @@ namespace AgentService
             }
 
             return false;
+        }
+
+        private static bool IsSimpleFolderName(string value)
+        {
+            string candidate = (value ?? string.Empty).Trim();
+            return !string.IsNullOrWhiteSpace(candidate) &&
+                   !Path.IsPathRooted(candidate) &&
+                   candidate.IndexOf(Path.DirectorySeparatorChar) < 0 &&
+                   candidate.IndexOf(Path.AltDirectorySeparatorChar) < 0;
         }
 
         private static bool IsExcludedFile(string filePath, IEnumerable<string> patterns)
@@ -235,9 +253,32 @@ namespace AgentService
 
     internal sealed class BackupScanResult
     {
+        private const int MaxDetailedErrors = 1000;
+        private int _suppressedErrors;
+
         public Dictionary<string, BackupFileSnapshot> Files { get; } =
             new Dictionary<string, BackupFileSnapshot>(StringComparer.OrdinalIgnoreCase);
         public List<string> Errors { get; } = new List<string>();
+
+        internal void AddError(string message)
+        {
+            if (Errors.Count < MaxDetailedErrors)
+            {
+                Errors.Add(message);
+                return;
+            }
+
+            _suppressedErrors++;
+            string summary = $"Đã lược bớt {_suppressedErrors} lỗi quét bổ sung để manifest không vượt giới hạn truyền.";
+            if (Errors.Count == MaxDetailedErrors)
+            {
+                Errors.Add(summary);
+            }
+            else
+            {
+                Errors[MaxDetailedErrors] = summary;
+            }
+        }
     }
 
     internal sealed class BackupFileSnapshot
@@ -246,5 +287,6 @@ namespace AgentService
         public string RelativeStoragePath { get; set; } = string.Empty;
         public long Size { get; set; }
         public DateTime LastWriteTimeUtc { get; set; }
+        public string ContentSha256 { get; set; } = string.Empty;
     }
 }

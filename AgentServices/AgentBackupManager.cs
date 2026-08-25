@@ -6,6 +6,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
@@ -47,12 +48,7 @@ namespace AgentService
             _sendPacket = sendPacket;
             _sendChunk = sendChunk;
 
-            string stateRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                "Intel",
-                "Driver",
-                "BackupState");
-            _statePath = Path.Combine(stateRoot, SanitizeFileName(agentId) + ".json");
+            _statePath = AgentDataPaths.GetBackupStatePath(SanitizeFileName(agentId));
         }
 
         public async Task<BackupConfigAck> ApplyConfigurationAsync(string json, CancellationToken token)
@@ -97,7 +93,10 @@ namespace AgentService
                         pending.TrySetResult(info);
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning("Không đọc được tín hiệu resume FIRST: {Message}", ex.Message);
+                }
                 return;
             }
 
@@ -106,8 +105,9 @@ namespace AgentService
             {
                 result = JsonSerializer.Deserialize<BackupSessionResult>(json);
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogWarning("Không đọc được tín hiệu phiên backup: {Message}", ex.Message);
                 return;
             }
 
@@ -137,6 +137,7 @@ namespace AgentService
                     BackupConfiguration? config = await LoadConfigurationAsync(token);
                     if (config != null && config.Enabled && _isConnected())
                     {
+                        ValidateConfiguration(config);
                         BackupAgentState state = await LoadStateAsync(token);
                         if (IsBackupDue(config, state, DateTime.Now))
                         {
@@ -186,7 +187,7 @@ namespace AgentService
             using IDisposable sleepBlock = SystemSleepBlocker.PreventSystemSleep(
                 "AgentServices đang thực hiện backup dữ liệu lên AgentControl.");
 
-            bool isInitialFull = state.Inventory.Count == 0;
+            bool isInitialFull = !state.InitialBackupCompleted;
             bool createSyntheticFull = !isInitialFull &&
                                        (state.LastFullBackupUtc == null ||
                                         (DateTime.UtcNow - state.LastFullBackupUtc.Value).TotalDays >= config.FullBackupPeriodDays);
@@ -200,7 +201,7 @@ namespace AgentService
 
             _logger.LogInformation("Bắt đầu quét dữ liệu cho phiên {SessionName}.", sessionName);
             BackupScanResult scan;
-            if (isInitialFull && state.PendingFirstInventory.Count > 0)
+            if (isInitialFull && state.PendingFirstPlanInitialized)
             {
                 scan = new BackupScanResult();
                 foreach ((string path, BackupFileSnapshot snapshot) in state.PendingFirstInventory)
@@ -215,6 +216,7 @@ namespace AgentService
                 if (isInitialFull)
                 {
                     state.FirstStartedAtUtc = startedAtUtc;
+                    state.PendingFirstPlanInitialized = true;
                     state.PendingFirstInventory = new Dictionary<string, BackupFileSnapshot>(
                         scan.Files, StringComparer.OrdinalIgnoreCase);
                     await SaveStateAsync(state, token);
@@ -241,6 +243,10 @@ namespace AgentService
                 else if (old.Size != current.Size || old.LastWriteTimeUtc != current.LastWriteTimeUtc)
                 {
                     modified.Add(current);
+                }
+                else
+                {
+                    current.ContentSha256 = old.ContentSha256;
                 }
             }
 
@@ -296,6 +302,7 @@ namespace AgentService
                 }
 
                 HashSet<string> failedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                int skippedSinceStateCheckpoint = 0;
                 IEnumerable<BackupFileSnapshot> filesToUpload = isInitialFull
                     ? scan.Files.Values
                     : created.Concat(modified);
@@ -322,7 +329,12 @@ namespace AgentService
                             {
                                 failedPaths.Add(file.FullPath);
                                 state.PendingFirstSkippedFiles[file.FullPath] = "Control đã ghi nhận file này ở trạng thái Skipped.";
-                                await SaveStateAsync(state, token);
+                                skippedSinceStateCheckpoint++;
+                                if (skippedSinceStateCheckpoint >= 100)
+                                {
+                                    await SaveStateAsync(state, token);
+                                    skippedSinceStateCheckpoint = 0;
+                                }
                             }
                         }
                         else
@@ -341,8 +353,13 @@ namespace AgentService
                         {
                             string reason = ex.Message;
                             state.PendingFirstSkippedFiles[file.FullPath] = reason;
-                            await SaveStateAsync(state, token);
                             await NotifyFirstFileSkippedAsync(sessionName, file, reason, token);
+                            skippedSinceStateCheckpoint++;
+                            if (skippedSinceStateCheckpoint >= 100)
+                            {
+                                await SaveStateAsync(state, token);
+                                skippedSinceStateCheckpoint = 0;
+                            }
                         }
                         else
                         {
@@ -351,9 +368,14 @@ namespace AgentService
                     }
                 }
 
-                // Chi dua file da upload thanh cong vao manifest/inventory cua Control.
-                manifest.Created.RemoveAll(entry => failedPaths.Contains(entry.SourcePath));
-                manifest.Modified.RemoveAll(entry => failedPaths.Contains(entry.SourcePath));
+                // Tao entry sau upload de manifest mang SHA-256 da tinh tren dung noi dung da gui.
+                manifest.Created = isInitialFull
+                    ? new List<BackupManifestEntry>()
+                    : created.Where(file => !failedPaths.Contains(file.FullPath)).Select(ToManifestEntry).ToList();
+                manifest.Modified = modified
+                    .Where(file => !failedPaths.Contains(file.FullPath))
+                    .Select(ToManifestEntry)
+                    .ToList();
 
                 manifest.CompletedAtUtc = DateTime.UtcNow;
                 await _sendPacket(new SocketPacket
@@ -372,29 +394,27 @@ namespace AgentService
                     throw new InvalidOperationException(result.Message);
                 }
 
-                Dictionary<string, BackupFileSnapshot> committedInventory = new Dictionary<string, BackupFileSnapshot>(
+                state.Inventory = BackupInventoryCommitter.Build(
                     scan.Files,
-                    StringComparer.OrdinalIgnoreCase);
-                foreach (string failedPath in failedPaths)
-                {
-                    if (previous.TryGetValue(failedPath, out BackupFileSnapshot? old))
-                    {
-                        committedInventory[failedPath] = old;
-                    }
-                    else
-                    {
-                        committedInventory.Remove(failedPath);
-                    }
-                }
-
-                state.Inventory = committedInventory;
+                    previous,
+                    failedPaths,
+                    scan.Errors.Count > 0);
                 state.LastSuccessfulBackupUtc = DateTime.UtcNow;
-                if (isInitialFull || createSyntheticFull)
+                if (isInitialFull || (createSyntheticFull && result.SyntheticFullCompleted))
                 {
                     state.LastFullBackupUtc = state.LastSuccessfulBackupUtc;
                 }
+                if (createSyntheticFull && !result.SyntheticFullCompleted)
+                {
+                    _logger.LogWarning(
+                        "Phiên {SessionName} đã chốt INC nhưng Synthetic Full chưa hoàn tất: {Message}",
+                        sessionName,
+                        result.Message);
+                }
                 if (isInitialFull)
                 {
+                    state.InitialBackupCompleted = true;
+                    state.PendingFirstPlanInitialized = false;
                     state.PendingFirstInventory.Clear();
                     state.PendingFirstSkippedFiles.Clear();
                     state.FirstStartedAtUtc = null;
@@ -469,6 +489,10 @@ namespace AgentService
                 {
                     await SendFileAsync(sessionName, transferSnapshot, token, info.Offset);
                 }
+                else
+                {
+                    transferSnapshot.ContentSha256 = info.ContentSha256;
+                }
 
                 FileInfo after = new FileInfo(plannedSnapshot.FullPath);
                 if (!after.Exists || after.Length != transferSnapshot.Size ||
@@ -476,6 +500,7 @@ namespace AgentService
                 {
                     throw new IOException("File thay đổi trong lúc upload FIRST; sẽ truyền lại file này ở lần resume.");
                 }
+                plannedSnapshot.ContentSha256 = transferSnapshot.ContentSha256;
                 return true;
             }
             finally
@@ -517,18 +542,40 @@ namespace AgentService
                 snapshot.FullPath,
                 FileMode.Open,
                 FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete,
+                FileShare.Read,
                 FileChunkSize,
-                useAsync: true);
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+            if (source.Length != snapshot.Size ||
+                File.GetLastWriteTimeUtc(snapshot.FullPath) != snapshot.LastWriteTimeUtc)
+            {
+                throw new IOException("File đã thay đổi sau lúc quét; sẽ xử lý ở lần backup kế tiếp.");
+            }
 
             long offset = Math.Clamp(startOffset, 0, snapshot.Size);
-            source.Seek(offset, SeekOrigin.Begin);
             long remaining = snapshot.Size - offset;
             byte[] buffer = ArrayPool<byte>.Shared.Rent(FileChunkSize);
+            using IncrementalHash contentHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             try
             {
+                // Resume van bam lai prefix tren Agent (khong gui) de hash cuoi dai dien toan bo file.
+                source.Seek(0, SeekOrigin.Begin);
+                long hashedPrefix = 0;
+                while (hashedPrefix < offset)
+                {
+                    int requested = (int)Math.Min(buffer.Length, offset - hashedPrefix);
+                    int read = await source.ReadAsync(buffer.AsMemory(0, requested), token);
+                    if (read == 0)
+                    {
+                        throw new EndOfStreamException("File kết thúc trước mốc resume backup.");
+                    }
+                    contentHash.AppendData(buffer, 0, read);
+                    hashedPrefix += read;
+                }
+
                 if (remaining == 0)
                 {
+                    snapshot.ContentSha256 = Convert.ToHexString(contentHash.GetHashAndReset());
                     await _sendChunk(CreateChunkHeader(sessionName, snapshot, offset, true), buffer, 0, token);
                     return;
                 }
@@ -543,9 +590,20 @@ namespace AgentService
                     }
 
                     bool isLast = offset + read >= snapshot.Size;
+                    contentHash.AppendData(buffer, 0, read);
+                    if (isLast)
+                    {
+                        snapshot.ContentSha256 = Convert.ToHexString(contentHash.GetHashAndReset());
+                    }
                     await _sendChunk(CreateChunkHeader(sessionName, snapshot, offset, isLast), buffer, read, token);
                     offset += read;
                     remaining -= read;
+                }
+
+                if (source.Length != snapshot.Size ||
+                    File.GetLastWriteTimeUtc(snapshot.FullPath) != snapshot.LastWriteTimeUtc)
+                {
+                    throw new IOException("File thay đổi trong lúc backup; không chốt phiên này.");
                 }
             }
             finally
@@ -569,7 +627,8 @@ namespace AgentService
                 TotalBytes = snapshot.Size,
                 Offset = offset,
                 IsLastChunk = isLast,
-                LastWriteTimeUtc = snapshot.LastWriteTimeUtc
+                LastWriteTimeUtc = snapshot.LastWriteTimeUtc,
+                ContentSha256 = isLast ? snapshot.ContentSha256 : string.Empty
             };
         }
 
@@ -591,10 +650,20 @@ namespace AgentService
 
                 root["BackupConfig"] = JsonSerializer.SerializeToNode(config);
                 string tempPath = _appSettingsPath + ".backup.tmp";
-                await File.WriteAllTextAsync(
+                byte[] payload = System.Text.Encoding.UTF8.GetBytes(
+                    root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                await using (FileStream destination = new FileStream(
                     tempPath,
-                    root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
-                    token);
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None,
+                    64 * 1024,
+                    FileOptions.Asynchronous | FileOptions.WriteThrough))
+                {
+                    await destination.WriteAsync(payload, token);
+                    await destination.FlushAsync(token);
+                    destination.Flush(flushToDisk: true);
+                }
                 File.Move(tempPath, _appSettingsPath, overwrite: true);
             }
             finally
@@ -637,8 +706,16 @@ namespace AgentService
                     return new BackupAgentState();
                 }
 
-                string json = await File.ReadAllTextAsync(_statePath, token);
-                BackupAgentState state = JsonSerializer.Deserialize<BackupAgentState>(json) ?? new BackupAgentState();
+                await using FileStream source = new FileStream(
+                    _statePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read,
+                    128 * 1024,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan);
+                BackupAgentState state = await JsonSerializer.DeserializeAsync<BackupAgentState>(
+                    source,
+                    cancellationToken: token) ?? new BackupAgentState();
                 state.Inventory = new Dictionary<string, BackupFileSnapshot>(state.Inventory, StringComparer.OrdinalIgnoreCase);
                 state.PendingFirstInventory = new Dictionary<string, BackupFileSnapshot>(
                     state.PendingFirstInventory ?? new Dictionary<string, BackupFileSnapshot>(),
@@ -646,7 +723,19 @@ namespace AgentService
                 state.PendingFirstSkippedFiles = new Dictionary<string, string>(
                     state.PendingFirstSkippedFiles ?? new Dictionary<string, string>(),
                     StringComparer.OrdinalIgnoreCase);
+                // Tuong thich state cua cac ban truoc khi co hai co nay.
+                state.InitialBackupCompleted = state.InitialBackupCompleted ||
+                                               state.LastSuccessfulBackupUtc.HasValue ||
+                                               state.Inventory.Count > 0;
+                state.PendingFirstPlanInitialized = state.PendingFirstPlanInitialized ||
+                                                    (!state.InitialBackupCompleted &&
+                                                     (state.FirstStartedAtUtc.HasValue ||
+                                                      state.PendingFirstInventory.Count > 0));
                 return state;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -664,8 +753,18 @@ namespace AgentService
             }
 
             string tempPath = _statePath + ".tmp";
-            string json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
-            await File.WriteAllTextAsync(tempPath, json, token);
+            await using (FileStream destination = new FileStream(
+                tempPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                128 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                await JsonSerializer.SerializeAsync(destination, state, cancellationToken: token);
+                await destination.FlushAsync(token);
+                destination.Flush(flushToDisk: true);
+            }
             File.Move(tempPath, _statePath, overwrite: true);
         }
 
@@ -696,7 +795,8 @@ namespace AgentService
             {
                 throw new InvalidDataException("Chu kỳ backup không hợp lệ.");
             }
-            if (!TimeSpan.TryParse(config.BackupTime, out _))
+            if (!TimeSpan.TryParse(config.BackupTime, out TimeSpan backupTime) ||
+                backupTime < TimeSpan.Zero || backupTime >= TimeSpan.FromDays(1))
             {
                 throw new InvalidDataException("Giờ backup không hợp lệ.");
             }
@@ -712,7 +812,8 @@ namespace AgentService
                 SourcePath = snapshot.FullPath,
                 RelativeStoragePath = snapshot.RelativeStoragePath,
                 Size = snapshot.Size,
-                LastWriteTimeUtc = snapshot.LastWriteTimeUtc
+                LastWriteTimeUtc = snapshot.LastWriteTimeUtc,
+                ContentSha256 = snapshot.ContentSha256
             };
         }
 
@@ -744,6 +845,8 @@ namespace AgentService
 
     internal sealed class BackupAgentState
     {
+        public bool InitialBackupCompleted { get; set; }
+        public bool PendingFirstPlanInitialized { get; set; }
         public DateTime? LastSuccessfulBackupUtc { get; set; }
         public DateTime? LastFullBackupUtc { get; set; }
         public DateTime? FirstStartedAtUtc { get; set; }

@@ -16,7 +16,7 @@ namespace AgentControl
 
         public RecoverySnapshotRepository(string? databasePath = null)
         {
-            string path = databasePath ?? Path.Combine(AppContext.BaseDirectory, "RecoverySnapshot.db");
+            string path = databasePath ?? ControlDataPaths.GetDatabasePath("RecoverySnapshot.db");
             SQLiteConnectionStringBuilder builder = new SQLiteConnectionStringBuilder
             {
                 DataSource = path,
@@ -33,6 +33,10 @@ namespace AgentControl
             {
                 if (_initialized) return;
                 using SQLiteConnection connection = OpenConnection();
+                using (SQLiteCommand pragma = new SQLiteCommand("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;", connection))
+                {
+                    pragma.ExecuteNonQuery();
+                }
                 using SQLiteCommand command = new SQLiteCommand(@"
 CREATE TABLE IF NOT EXISTS RecoverySnapshots (
     AgentID TEXT NOT NULL,
@@ -51,6 +55,7 @@ CREATE TABLE IF NOT EXISTS RecoverySnapshotFiles (
     FileName TEXT NOT NULL COLLATE NOCASE,
     Size INTEGER NOT NULL,
     LastWriteTimeUtc TEXT NOT NULL,
+    ContentSha256 TEXT NOT NULL DEFAULT '',
     SourceSessionRoot TEXT NOT NULL,
     PRIMARY KEY (AgentID, SnapshotDate, SourcePath)
 );
@@ -80,6 +85,11 @@ ON RecoverySnapshotDirectories (AgentID, SnapshotDate, ParentPath, DisplayName);
 CREATE INDEX IF NOT EXISTS IX_RecoverySelections_Run
 ON RecoverySelections (RunID, Kind, Value);", connection);
                 command.ExecuteNonQuery();
+                await BackupDatabase.EnsureColumnAsync(
+                    connection,
+                    "RecoverySnapshotFiles",
+                    "ContentSha256",
+                    "TEXT NOT NULL DEFAULT ''");
                 _initialized = true;
             }
             finally
@@ -349,7 +359,8 @@ LIMIT @BatchSize;", "f");
             string prefix = string.IsNullOrEmpty(alias) ? string.Empty : alias + ".";
             return new SQLiteCommand($@"
 SELECT {prefix}SourcePath, {prefix}RelativeStoragePath, {prefix}VirtualDirectory,
-       {prefix}FileName, {prefix}Size, {prefix}LastWriteTimeUtc, {prefix}SourceSessionRoot
+       {prefix}FileName, {prefix}Size, {prefix}LastWriteTimeUtc,
+       {prefix}ContentSha256, {prefix}SourceSessionRoot
 FROM RecoverySnapshotFiles {(string.IsNullOrEmpty(alias) ? string.Empty : alias)}
 {suffix}", connection);
         }
@@ -369,7 +380,8 @@ FROM RecoverySnapshotFiles {(string.IsNullOrEmpty(alias) ? string.Empty : alias)
                     Size = reader.GetInt64(4),
                     LastWriteTimeUtc = DateTime.Parse(
                         reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-                    SourceSessionRoot = reader.GetString(6)
+                    ContentSha256 = reader.IsDBNull(6) ? string.Empty : reader.GetString(6),
+                    SourceSessionRoot = reader.GetString(7)
                 });
             }
             return result;
@@ -420,16 +432,17 @@ OR EXISTS (SELECT 1 FROM RecoverySelections sd
             _upsert = new SQLiteCommand(@"
 INSERT INTO RecoverySnapshotFiles
     (AgentID, SnapshotDate, SourcePath, RelativeStoragePath, VirtualDirectory,
-     FileName, Size, LastWriteTimeUtc, SourceSessionRoot)
+     FileName, Size, LastWriteTimeUtc, ContentSha256, SourceSessionRoot)
 VALUES
     (@AgentID, @Date, @SourcePath, @RelativePath, @Directory,
-     @FileName, @Size, @LastWrite, @SessionRoot)
+     @FileName, @Size, @LastWrite, @ContentSha256, @SessionRoot)
 ON CONFLICT(AgentID, SnapshotDate, SourcePath) DO UPDATE SET
     RelativeStoragePath = excluded.RelativeStoragePath,
     VirtualDirectory = excluded.VirtualDirectory,
     FileName = excluded.FileName,
     Size = excluded.Size,
     LastWriteTimeUtc = excluded.LastWriteTimeUtc,
+    ContentSha256 = excluded.ContentSha256,
     SourceSessionRoot = excluded.SourceSessionRoot;", connection, transaction);
             _upsert.Parameters.AddWithValue("@AgentID", agentId);
             _upsert.Parameters.AddWithValue("@Date", date);
@@ -439,6 +452,7 @@ ON CONFLICT(AgentID, SnapshotDate, SourcePath) DO UPDATE SET
             _upsert.Parameters.Add("@FileName", DbType.String);
             _upsert.Parameters.Add("@Size", DbType.Int64);
             _upsert.Parameters.Add("@LastWrite", DbType.String);
+            _upsert.Parameters.Add("@ContentSha256", DbType.String);
             _upsert.Parameters.Add("@SessionRoot", DbType.String);
 
             _delete = new SQLiteCommand(@"
@@ -472,6 +486,7 @@ DELETE FROM RecoverySnapshotFiles WHERE AgentID = @AgentID AND SnapshotDate = @D
             _upsert.Parameters["@FileName"].Value = Path.GetFileName(relative);
             _upsert.Parameters["@Size"].Value = Math.Max(0, entry.Size);
             _upsert.Parameters["@LastWrite"].Value = entry.LastWriteTimeUtc.ToString("O");
+            _upsert.Parameters["@ContentSha256"].Value = entry.ContentSha256 ?? string.Empty;
             _upsert.Parameters["@SessionRoot"].Value = sessionRoot;
             _upsert.ExecuteNonQuery();
         }
@@ -535,14 +550,7 @@ WHERE AgentID = @AgentID AND SnapshotDate = @Date;", _connection, _transaction);
 
         private static string NormalizeRelativePath(string path)
         {
-            string value = (path ?? string.Empty)
-                .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
-                .TrimStart(Path.DirectorySeparatorChar);
-            if (string.IsNullOrWhiteSpace(value) || Path.IsPathRooted(value) || value.Split(Path.DirectorySeparatorChar).Any(p => p == ".."))
-            {
-                throw new InvalidDataException("Đường dẫn file trong manifest không hợp lệ.");
-            }
-            return value;
+            return PathSafety.NormalizeRelativePath(path);
         }
 
         private static string NormalizeVirtualPath(string path) =>
@@ -571,6 +579,7 @@ WHERE AgentID = @AgentID AND SnapshotDate = @Date;", _connection, _transaction);
         public string FileName { get; set; } = string.Empty;
         public long Size { get; set; }
         public DateTime LastWriteTimeUtc { get; set; }
+        public string ContentSha256 { get; set; } = string.Empty;
         public string SourceSessionRoot { get; set; } = string.Empty;
     }
 }

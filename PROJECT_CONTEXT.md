@@ -6,7 +6,7 @@ File nay dung de chuyen tiep sang cuoc tro chuyen Codex moi. Khi bat dau chat mo
 
 ## 1. Thong tin repo hien tai
 
-- Workspace: `C:\Users\DoThai\Desktop\repoC#`
+- Workspace: `C:\Users\DoThai\Desktop\Repo#`
 - Branch lam viec hien tai: `main`
 - Remote branch hien tai: `origin/main`
 - Trang thai Git sau lan don gan nhat:
@@ -15,7 +15,9 @@ File nay dung de chuyen tiep sang cuoc tro chuyen Codex moi. Khi bat dau chat mo
   - Da xoa remote branch code moi nhat.
   - Da xoa branch `Complete-v1`.
   - Tu nay chi lam truc tiep tren `main`.
-- Commit dau hien tai cua `main`: `2da3055` - `Toi uu, fix lag khi keo re giao dien`
+- Checkpoint truoc dot toi uu toan he thong: `e0527b4` - `TRUOC KHI TOI UU VA FIX TOAN BO`
+- Tag checkpoint: `checkpoint-truoc-toi-uu-fix-20260825`
+- Xem muc 17 de biet trang thai code/test moi nhat; khi chuyen may hay chay `git log -1 --oneline` de lay commit dau thuc te.
 - Remote GitHub: `https://github.com/dargonson/CaoData`
 
 ## 2. Quy tac lam viec voi user
@@ -68,7 +70,7 @@ Repo gom cac project chinh:
   - `AppVersion.cs` dang co:
     - `CurrentVersionControl = "1.8"`
     - `CurrentVersionAgent = "1.8"`
-    - `AgentUpdateRootDirectory = @"C:\ProgramData\Intel\Driver\Updates"`
+    - `AgentUpdateRootDirectory = @"C:\ProgramData\CaoData\AgentServices\Updates"`
     - update marker/log constants.
 
 - `AgentUpdater`
@@ -209,7 +211,8 @@ Repo gom cac project chinh:
   - `AgentControl/Updates/AgentServices/AgentUpdater.exe`
   - `AgentControl/Updates/AgentServices/README.txt`
 - Agent update root tren may Agent:
-  - `C:\ProgramData\Intel\Driver\Updates`
+  - `C:\ProgramData\CaoData\AgentServices\Updates`
+  - Marker/log cu trong `C:\ProgramData\Intel\Driver\Updates` duoc migrate mot lan de khong mat trang thai update dang do.
 - AgentServices gui update status ve Control, dong thoi ghi log.
 - Control co form/status rieng de xem tien trinh update tung Agent.
 - Nhieu Agent update thi moi Agent co form/status rieng.
@@ -377,7 +380,7 @@ git status --short --branch
 ## 10. Trang thai mong muon sau moi lan sua
 
 - Build khong error.
-- Neu co warning cu thi co the de lai, nhung phai noi ro.
+- Build Debug/Release hien phai dat 0 error, 0 warning; warning moi phai duoc phan loai va xu ly truoc khi ban giao.
 - UI khong giat khi:
   - Keo/re-size window.
   - Download dang chay.
@@ -436,7 +439,7 @@ git status --short --branch
   - `{ControlStoragePath}/{SessionName}/manifest.json`
 - Manifest co danh sach `Created`, `Modified`, `Deleted`, `Errors`.
 - Control cap nhat `BackupFileInventory` gom ten, source path, relative path, size, last modified, deleted va session cap nhat.
-- State incremental cua Agent nam tai `%ProgramData%/Intel/Driver/BackupState/{AgentID}.json`; day la runtime state, khong phai file config.
+- State incremental cua Agent nam tai `%ProgramData%/CaoData/AgentServices/BackupState/{AgentID}.json`; file legacy trong `%ProgramData%/Intel/Driver/BackupState` duoc copy mot lan. Day la runtime state, khong phai file config.
 - Neu scan gap loi quyen truy cap thi van ghi vao manifest nhung khong ket luan file bi xoa, tranh note xoa nham.
 
 ### 12.4 Synthetic Full sau chu ky (bo sung 2026-08-24)
@@ -458,10 +461,10 @@ git status --short --branch
 - Da co restore file/folder ve mot thu muc tren may AgentControl; chua co luong day nguoc restore xuong AgentServices.
 - Scanner hien quet metadata full va so sanh state. Chua doc USN Journal; code scanner da tach rieng de toi uu USN sau khi luong FIRST/INC duoc test on dinh.
 - FIRST dau tien khong con dua toan bo danh sach `Created` vao goi SessionComplete. Control tao manifest streaming tu DB theo lo; Agent van scan metadata vao dictionary/state JSON de giu co dinh ke hoach FIRST qua restart.
-- Da build full solution thanh cong, 0 error. Can test thuc te voi mot thu muc nho truoc:
-  1. FIRST co file + manifest dung.
-  2. Sua/them/xoa file, doi lich sang ngay hop le hoac state test, kiem tra INC.
-  3. Kiem tra config thuc te duoc ghi vao appsettings cua ban Agent dang chay.
+- Da co bo integration test tu dong cho FIRST/INC/Synthetic Full/recovery/resume; xem muc 17. Van can test nghiem thu tren hai may that voi du lieu dai ngay truoc khi dua vao production:
+  1. FIRST nhieu GB qua LAN/WAN, ngat mang/restart giua chung va resume.
+  2. Sua/them/xoa file sau FIRST, kiem tra INC va Synthetic Full dung moc ngay.
+  3. Kiem tra config thuc te duoc ghi vao appsettings cua Windows Service Agent dang chay.
 - Khi debug cung may, phai stop Windows Service AgentServices de tranh hai instance cung AgentID da nhau/reconnect lien tuc.
 
 ### 12.6 FIRST resume lau ngay (bo sung 2026-08-24)
@@ -555,3 +558,101 @@ git status --short --branch
 - Cau hinh duoc nap lai gom: duong dan luu tren Control, chu ky INC, chu ky Full, gio backup, thu muc loai tru, extension/pattern loai tru va cac checkbox nguon backup tren `tvRemoteFolders`.
 - Agent chua co cau hinh se ve mac dinh: duong dan rong, Full 60 ngay, backup moi 1 ngay, gio `00:00`, khong tick nguon, exclude folder rong va cac pattern mac dinh `.tmp`, `.temp`, `~*`, `~$*`.
 - Da test runtime voi hai Agent co cau hinh khac nhau: nap dung tung Agent, cap nhat Agent A khong anh huong Agent B, Agent chua cau hinh tra ve `null` de UI dung mac dinh.
+
+## 17. Dot toi uu, hardening va test toan he thong - 2026-08-25
+
+### 17.1 Git checkpoint va nguyen tac pham vi
+
+- Checkpoint truoc khi sua: commit `e0527b4` - `TRUOC KHI TOI UU VA FIX TOAN BO`.
+- Tag checkpoint: `checkpoint-truoc-toi-uu-fix-20260825`.
+- Dot nay giu nguyen UI va hanh vi cu; module moi duoc tach thanh file/class rieng khi co the. Cac khoi bat buoc chen vao code dung chung co comment phan dinh.
+- Project test rieng `AgentIntegrationTests` da duoc them vao solution; khong chen test/debug hook vao executable production.
+
+### 17.2 Bao mat va do ben giao thuc
+
+- Toan bo ket noi Control/Agent/Updater dung TLS 1.2/1.3 va challenge hai chieu bang PSK/HMAC-SHA256 gan voi certificate cua phien TLS.
+- AgentID dung cho moi binary/JSON packet phai trung AgentID da xac thuc; peer khong the tu doi AgentID sau handshake.
+- Shared key doc tu `CAODATA_SHARED_KEY` truoc, sau do moi toi:
+  - Control: `ConnectionSecurity:SharedKey` trong `AgentControl/appsettings.json`.
+  - Agent: `ConnectionConfig:SharedKey` trong `AgentServices/appsettings.json`.
+- Key phai it nhat 32 ky tu va phai giong nhau tren Control/Agent. Key dang commit chi la key deploy mac dinh; khi dua production phai thay key rieng tren tat ca may, uu tien environment variable de khong commit secret.
+- Control tu tao certificate server tai `%LocalAppData%/CaoData/AgentControl/AgentControl.transport.pfx`; file cat ngan/hong duoc doi ten `.corrupt-*` va tao lai an toan.
+- `TransferFrameProtocol` gioi han JSON frame 16 MB, binary header 1 MB va binary body 8 MB; JSON receive dung pool buffer de tranh cap phat RAM lon lien tuc.
+- `AgentShared/PathSafety.cs` chan rooted path, `..`, ADS (`:`), ten thiet bi DOS, separator lap, ky tu filename khong hop le va segment co dau cham/khoang trang cuoi; van giu dung ten hop le co khoang trang dau.
+- Cac luong ghi file dung chung `AgentShared/ResumableTransferFile.cs`: kiem tra offset/total/chunk, truncate khi offset 0, flush den dia va ho tro file 0 byte.
+
+### 17.3 Duong dan du lieu va SQLite
+
+- Du lieu Control khong con phu thuoc working directory:
+  - `%LocalAppData%/CaoData/AgentControl/AgentManagement.db`
+  - `%LocalAppData%/CaoData/AgentControl/BackupManagement.db`
+  - `%LocalAppData%/CaoData/AgentControl/RecoverySnapshot.db`
+  - co the override bang `CAODATA_CONTROL_DATA_ROOT` khi test/deploy.
+- Du lieu runtime Agent nam tai `%ProgramData%/CaoData/AgentServices`; co the override bang `CAODATA_AGENT_DATA_ROOT`.
+- DB cu o working directory/AppContext duoc migrate bang SQLite Backup API, vi vay ca transaction da commit nhung con trong WAL cung duoc mang theo; khong chi copy rieng file `.db`.
+- SQLite dung WAL, busy timeout va synchronous FULL cho du lieu queue/backup can do ben.
+- Backup config tren Control chi commit DB sau khi Agent tra ACK thanh cong; tranh UI/DB bao da deploy trong khi Agent ghi appsettings that bai.
+- Ghi appsettings, Agent backup state, manifest metadata va certificate deu dung file tam + flush + move de giam nguy co file JSON/PFX bi cat ngan khi mat dien.
+
+### 17.4 FIRST, INC va Synthetic Full
+
+- FIRST co ke hoach co dinh qua restart (`PendingFirstInventory`) va resume tung file tu offset that tren Control. File moi sinh trong luc FIRST duoc de cho INC ke tiep.
+- FIRST rong (0 file) gio van chot thanh snapshot hop le; state co co rieng `InitialBackupCompleted` va `PendingFirstPlanInitialized` de phan biet chua scan voi scan xong nhung rong.
+- File bi khoa, bi xoa, khong doc duoc hoac thay doi trong luc FIRST duoc skip rieng; phien tiep tuc. File do khong vao inventory va se duoc nhin nhu file moi/thay doi o INC sau.
+- FIRST chi dat ngay sau khi tat ca file Planned da Completed/Skipped. Neu bat dau 2026-08-18 va xong 2026-08-22 thi folder la `FIRST-{AgentID}-2026-08-22`.
+- DB/journal/manifest sidecar cho phep khoi phuc ca hai diem crash: truoc khi doi folder final va sau khi doi folder nhung truoc DB commit.
+- Manifest FIRST duoc ghi streaming theo lo, da test 100.000 entry; khong gom ca manifest vao RAM. `session.json` luu danh tinh va SHA-256 cua manifest de phat hien manifest bi thay the ke ca khi size/timestamp bi gia lap giong cu.
+- Moi file backup co SHA-256 trong manifest/inventory. Control chi chap nhan Created/Modified neu file vat ly da nhan du, dung size va dung hash.
+- INC khong duoc downgrade mot session da Success thanh Failed khi packet retry/ACK bi mat den sau.
+- Scanner bo qua reparse point/junction de tranh vong lap va vuot khoi nguon da chon.
+- Neu scanner gap access/I/O error, inventory cu bi thieu trong vung scan duoc giu lai thay vi bi xoa ngam; nhu vay INC sau van co the phat hien delete khi quet sach tro lai. Danh sach loi chi giu toi da 1.000 dong chi tiet + mot dong tong hop de khong lam phinh frame/manifest.
+- Synthetic Full dung folder `.building`, hard link neu cung volume va copy neu can. File INC moi duoc nhan vao `.incoming` roi moi replace, nen retry INC khong sua noi dung inode da hard-link vao FIRST cu.
+- Synthetic Full chi rebase inventory sau khi folder va manifest hoan chinh; loi Synthetic khong rollback INC da commit. Khoi dong lai co the chot tiep folder final hop le dua tren sidecar/hash.
+- Retention 60 ngay hien la chu ky tao Synthetic Full, chua tu xoa cac FIRST/INC cu.
+
+### 17.5 Recovery, upload/download va lifecycle
+
+- Recovery replay FIRST + INC streaming, index SQLite, staging theo batch va extract qua `.restoring`; kiem tra SHA-256 truoc khi replace file dich. Loi/traversal rollback snapshot/index thay vi de du lieu nua voi.
+- Download resume doi chieu DB offset voi kich thuoc file that; file thieu/dai/ngan bat thuong duoc reset dung cach. Neu job resume cu de checksum None thi tu nang len SHA-256 de xac minh noi dung.
+- Agent giu source file bang `FileShare.Read` trong luc checksum/gui de noi dung khong bi thay doi giua hash va transfer.
+- Download folder gui danh sach theo page va co backpressure; Control khong fallback sang duong dan local neu Agent khong tra du lieu.
+- Pending upload/download bi fail/wait dung trang thai khi socket mat; UI handler bat exception de khong lam crash WinForms.
+- Listener, heartbeat va reconnect co cancellation/cleanup ro rang. Heartbeat cua socket cu khong con ghi de trang thai socket moi cung AgentID.
+- Control dispose listener/socket/task/tray khi Exit; dong nut X chi an xuong tray. Control la `WinExe`, khong mo console den.
+- `SystemSleepBlocker` van cho shutdown va tat man hinh, chi chan system sleep theo dung pham vi da ghi o muc 14.
+
+### 17.6 Auto update AgentServices
+
+- `AgentUpdater/AgentUpdateWorkflow.cs` tach workflow copy/rollback khoi CLI de test doc lap.
+- Updater xac minh SHA-256, stop service, tao backup, replace, start lai; neu copy/start that bai thi rollback executable cu va thu start lai.
+- Marker/log update chuyen sang `%ProgramData%/CaoData/AgentServices/Updates`; artifact legacy `Intel/Driver/Updates` duoc migrate mot lan.
+- Control/Agent/Updater deu dung cung TLS + PSK. Port, timeout, path, hash va tham so CLI duoc validate.
+- `AgentControl.csproj` tu copy ba file trong `AgentControl/Updates/AgentServices` vao output Debug/Release/publish. Sau khi sua Agent/Updater phai publish lai va thay hai EXE source nay.
+- Goi da publish ngay 2026-08-25:
+  - `AgentServices.exe`: SHA-256 `C6C33096F7986809F89F2A18069357056F6009D53B97B8730FFABE8FB1A00536`.
+  - `AgentUpdater.exe`: SHA-256 `C453EBE43227EB0AA397E0C3D7A48466B4420C07BC6445C8E460727C07412C8A`.
+
+### 17.7 Ket qua test ngay 2026-08-25
+
+- `dotnet build AgentControl\AgentControl.sln -c Debug --no-restore`: 0 error, 0 warning.
+- `dotnet build AgentControl\AgentControl.sln -c Release`: 0 error, 0 warning.
+- `dotnet test AgentIntegrationTests\AgentIntegrationTests.csproj -c Debug`: 57/57 pass.
+- `dotnet test AgentIntegrationTests\AgentIntegrationTests.csproj -c Release --no-build`: 57/57 pass.
+- Chay lap toan bo suite Debug 3 lan lien tiep (171 test case executions): 171/171 pass, khong thay race/flaky failure.
+- `dotnet list ... package --vulnerable --include-transitive`: khong co package co lo hong theo NuGet source hien tai.
+- `dotnet list ... package --deprecated`: khong co package deprecated.
+- Test bao phu: TLS dung/sai PSK; frame/path validation; upload/download resume va file 0 byte; scanner/exclude/C-root/reparse; FIRST rong/resume/skip/hash/ACK loss/power-loss; INC create/modify/delete; Synthetic Full/hard-link/crash; manifest 100.000 entry/tamper; recovery replay/extract/traversal/corruption; DB WAL migration; updater success va rollback; icon Windows.
+- Smoke process Release:
+  - AgentControl khoi tao UI, cac DB va certificate tren data root tam, song on dinh cho den khi test dung dung process.
+  - AgentServices self-contained single-file khoi dong, tao backup state tren data root tam va tiep tuc reconnect binh thuong.
+- Luu y: Control chi mo port 9000 sau khi bam nut `Ket noi Agent`; smoke startup khong tu dong bam nut UI.
+
+### 17.8 Gioi han con lai / test nghiem thu can lam tren may that
+
+- Scanner hien van full-scan metadata, chua dung USN Journal. Day la lua chon on dinh hien tai; USN chi nen lam sau khi co benchmark o dia NTFS that va fallback cho volume khong ho tro.
+- Automated test khong thay the duoc test nhieu ngay tren hai may vat ly/Windows Service that, mat mang WAN, restart service/Control va mat dien cuong buc trong FIRST vai tram GB.
+- Restore hien chi extract ve AgentControl; chua day nguoc xuong Agent.
+- Upload Control -> Agent van khong resume theo quyet dinh hien tai; download va FIRST backup co resume.
+- Chua co retention/xoa backup cu. Khong tu xoa FIRST/INC de tranh mat du lieu truoc khi user chot chinh sach.
+- INC SessionComplete van la mot JSON frame; voi lich 1-2 ngay va quy mo thay doi thuong duoi 1.000 file thi du suc. FIRST lon da dung manifest streaming. Neu sau nay mot INC co the vuot 16 MB metadata thi can mo rong INC thanh protocol paged.
+- Truoc production phai doi PSK deploy, mo firewall/NAT dung port 9000, bam `Ket noi Agent` tren Control, va test update Windows Service bang mot Agent staging truoc khi rollout tat ca Agent.

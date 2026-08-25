@@ -9,6 +9,7 @@ namespace AgentService
     internal sealed class AgentUpdateClient
     {
         private const int BufferSize = 512 * 1024;
+        private const long MaxUpdateFileBytes = 1024L * 1024 * 1024;
         private readonly Func<SocketPacket, Task> _sendPacketAsync;
         private readonly Func<(string Host, int Port)> _getControlEndpoint;
         private readonly ILogger _logger;
@@ -49,6 +50,20 @@ namespace AgentService
                 var marker = JsonSerializer.Deserialize<AgentUpdateCompletionMarker>(json);
                 if (marker != null && !string.IsNullOrWhiteSpace(marker.SessionId))
                 {
+                    if (!string.IsNullOrWhiteSpace(marker.TargetVersion) &&
+                        !string.Equals(
+                            marker.TargetVersion,
+                            AppVersion.CurrentVersionAgent,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogWarning(
+                            "Bỏ completion marker của phiên bản {TargetVersion}; Agent hiện tại là {CurrentVersion}.",
+                            marker.TargetVersion,
+                            AppVersion.CurrentVersionAgent);
+                        File.Delete(markerPath);
+                        return;
+                    }
+
                     await SendStatusAsync(agentId, marker.SessionId, "Completed", "Lệnh cuối: AgentServices phiên bản mới đã kết nối lại Control.");
                 }
 
@@ -99,6 +114,7 @@ namespace AgentService
             {
                 throw new InvalidDataException("Gói update không hợp lệ.");
             }
+            ValidateUpdateRequest(request);
 
             string sessionRoot = AppVersion.GetAgentUpdateSessionDirectory(request.SessionId);
 
@@ -124,6 +140,14 @@ namespace AgentService
             }
 
             UpdateSession session = GetSession(begin.SessionId);
+            (string expectedName, long expectedSize, string expectedSha256) =
+                GetExpectedFile(session.Request, begin.Role);
+            if (!Path.GetFileName(begin.FileName).Equals(expectedName, StringComparison.OrdinalIgnoreCase) ||
+                begin.TotalBytes != expectedSize ||
+                !begin.Sha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException("Metadata file update không khớp manifest đã nhận.");
+            }
             string filePath = GetSessionFilePath(session, begin.FileName);
 
             session.Files[begin.Role] = new UpdateFileState(begin.Role, filePath, begin.TotalBytes, begin.Sha256);
@@ -153,10 +177,23 @@ namespace AgentService
             }
 
             byte[] bytes = Convert.FromBase64String(chunk.Base64Data);
-            using var fs = new FileStream(fileState.FilePath, FileMode.Open, FileAccess.Write, FileShare.Read, BufferSize, FileOptions.Asynchronous);
+            if (bytes.Length <= 0 || bytes.Length > BufferSize ||
+                chunk.Offset != fileState.ReceivedBytes ||
+                chunk.Offset < 0 ||
+                bytes.Length > fileState.TotalBytes - chunk.Offset)
+            {
+                throw new InvalidDataException("Offset hoặc kích thước chunk update không hợp lệ.");
+            }
+
+            using var fs = new FileStream(fileState.FilePath, FileMode.Open, FileAccess.Write, FileShare.None, BufferSize, FileOptions.Asynchronous);
+            if (fs.Length != fileState.ReceivedBytes)
+            {
+                throw new InvalidDataException("Kích thước file update tạm không khớp trạng thái nhận.");
+            }
             fs.Seek(chunk.Offset, SeekOrigin.Begin);
             await fs.WriteAsync(bytes, 0, bytes.Length, cancellationToken);
-            fileState.ReceivedBytes = Math.Max(fileState.ReceivedBytes, chunk.Offset + bytes.Length);
+            await fs.FlushAsync(cancellationToken);
+            fileState.ReceivedBytes = chunk.Offset + bytes.Length;
         }
 
         private async Task EndFileAsync(SocketPacket packet, CancellationToken cancellationToken)
@@ -173,7 +210,8 @@ namespace AgentService
                 throw new InvalidDataException("Không tìm thấy file update để kiểm tra.");
             }
 
-            if (fileState.ReceivedBytes != fileState.TotalBytes)
+            if (fileState.ReceivedBytes != fileState.TotalBytes ||
+                new FileInfo(fileState.FilePath).Length != fileState.TotalBytes)
             {
                 throw new InvalidDataException($"File update chưa nhận đủ dữ liệu: {Path.GetFileName(fileState.FilePath)}.");
             }
@@ -204,6 +242,10 @@ namespace AgentService
             }
 
             UpdateSession session = GetSession(apply.SessionId);
+            if (!string.Equals(apply.TargetVersion, session.Request.TargetVersion, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException("Phiên bản apply không khớp manifest update.");
+            }
             UpdateFileState serviceFile = GetVerifiedFile(session, AgentUpdateFileRoles.Service);
             UpdateFileState updaterFile = GetVerifiedFile(session, AgentUpdateFileRoles.Updater);
             await SendStatusAsync(packet.AgentID, apply.SessionId, "Preparing", "Chuẩn bị update...");
@@ -221,27 +263,26 @@ namespace AgentService
             string backupDirectory = Path.Combine(session.RootDirectory, "backup");
             Directory.CreateDirectory(backupDirectory);
             (string controlHost, int controlPort) = _getControlEndpoint();
-
-            string arguments =
-                $"--service-name \"{apply.ServiceName}\" " +
-                $"--current-exe \"{currentExe}\" " +
-                $"--new-exe \"{serviceFile.FilePath}\" " +
-                $"--backup-dir \"{backupDirectory}\" " +
-                $"--expected-sha256 \"{serviceFile.Sha256}\" " +
-                $"--target-version \"{apply.TargetVersion}\" " +
-                $"--agent-id \"{packet.AgentID}\" " +
-                $"--session-id \"{apply.SessionId}\" " +
-                $"--control-host \"{controlHost}\" " +
-                $"--control-port \"{controlPort}\"";
+            string securityConfigPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
 
             var startInfo = new ProcessStartInfo
             {
                 FileName = updaterFile.FilePath,
-                Arguments = arguments,
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 WorkingDirectory = session.RootDirectory
             };
+            AddArgument(startInfo, "--service-name", apply.ServiceName);
+            AddArgument(startInfo, "--current-exe", currentExe);
+            AddArgument(startInfo, "--new-exe", serviceFile.FilePath);
+            AddArgument(startInfo, "--backup-dir", backupDirectory);
+            AddArgument(startInfo, "--expected-sha256", serviceFile.Sha256);
+            AddArgument(startInfo, "--target-version", apply.TargetVersion);
+            AddArgument(startInfo, "--agent-id", packet.AgentID);
+            AddArgument(startInfo, "--session-id", apply.SessionId);
+            AddArgument(startInfo, "--control-host", controlHost);
+            AddArgument(startInfo, "--control-port", controlPort.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            AddArgument(startInfo, "--security-config", securityConfigPath);
 
             await SendStatusAsync(packet.AgentID, apply.SessionId, "OpeningUpdater", "Đang mở AgentUpdater.");
             Process? updaterProcess = Process.Start(startInfo);
@@ -271,6 +312,52 @@ namespace AgentService
             }
 
             return fileState;
+        }
+
+        private static void ValidateUpdateRequest(AgentUpdateRequest request)
+        {
+            ValidateExpectedFile(request.ServiceFileName, request.ServiceFileSize, request.ServiceSha256);
+            ValidateExpectedFile(request.UpdaterFileName, request.UpdaterFileSize, request.UpdaterSha256);
+            if (string.IsNullOrWhiteSpace(request.TargetVersion))
+            {
+                throw new InvalidDataException("Phiên bản update đang trống.");
+            }
+        }
+
+        private static void ValidateExpectedFile(string fileName, long size, string sha256)
+        {
+            if (string.IsNullOrWhiteSpace(fileName) ||
+                !Path.GetFileName(fileName).Equals(fileName, StringComparison.Ordinal) ||
+                size <= 0 || size > MaxUpdateFileBytes ||
+                !IsSha256(sha256))
+            {
+                throw new InvalidDataException("Manifest file update không hợp lệ.");
+            }
+        }
+
+        private static (string FileName, long Size, string Sha256) GetExpectedFile(
+            AgentUpdateRequest request,
+            string role)
+        {
+            if (string.Equals(role, AgentUpdateFileRoles.Service, StringComparison.OrdinalIgnoreCase))
+            {
+                return (request.ServiceFileName, request.ServiceFileSize, request.ServiceSha256);
+            }
+            if (string.Equals(role, AgentUpdateFileRoles.Updater, StringComparison.OrdinalIgnoreCase))
+            {
+                return (request.UpdaterFileName, request.UpdaterFileSize, request.UpdaterSha256);
+            }
+
+            throw new InvalidDataException("Role file update không hợp lệ.");
+        }
+
+        private static bool IsSha256(string value) =>
+            value != null && value.Length == 64 && value.All(Uri.IsHexDigit);
+
+        private static void AddArgument(ProcessStartInfo startInfo, string name, string value)
+        {
+            startInfo.ArgumentList.Add(name);
+            startInfo.ArgumentList.Add(value ?? string.Empty);
         }
 
         private static string GetSessionFilePath(UpdateSession session, string fileName)

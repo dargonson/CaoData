@@ -34,7 +34,9 @@ namespace AgentControl
             ListboxAgents.SelectedIndexChanged += BackupAgentSelectionChanged;
 
             AddDefaultBackupPatterns();
-            _ = BackupRepository.InitializeAsync();
+            _ = RunControlBackgroundOperationAsync(
+                BackupRepository.InitializeAsync,
+                "Khởi tạo database Backup");
         }
 
         private async void BackupAgentSelectionChanged(object? sender, EventArgs e)
@@ -250,7 +252,6 @@ namespace AgentControl
 
             try
             {
-                await BackupRepository.SaveConfigAsync(config);
                 await SendPacketToAgentAsync(agentId, agentInfo.Client, new SocketPacket
                 {
                     Type = BackupPacketTypes.ConfigDeploy,
@@ -270,6 +271,8 @@ namespace AgentControl
                     throw new InvalidOperationException(ack.Message);
                 }
 
+                // Chi chot DB Control sau khi Agent da ghi appsettings va ACK thanh cong.
+                await BackupRepository.SaveConfigAsync(config);
                 MessageBox.Show(ack.Message, "Backup", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
@@ -309,6 +312,7 @@ namespace AgentControl
                 {
                     try
                     {
+                        EnsureBackupPayloadAgent(packet.AgentID, request.AgentID);
                         await _backupReceiver.BeginSessionAsync(request);
                         result.Success = true;
                         result.Message = "Control đã sẵn sàng nhận backup.";
@@ -333,7 +337,14 @@ namespace AgentControl
                 BackupManifest? manifest = JsonSerializer.Deserialize<BackupManifest>(packet.Data);
                 BackupSessionResult result = manifest == null
                     ? new BackupSessionResult { Success = false, Message = "Manifest backup không hợp lệ." }
-                    : await _backupReceiver.CompleteSessionAsync(manifest);
+                    : !IsBackupPayloadAgent(packet.AgentID, manifest.AgentID)
+                        ? new BackupSessionResult
+                        {
+                            SessionName = manifest.SessionName,
+                            Success = false,
+                            Message = "AgentID trong manifest không khớp kết nối đã xác thực."
+                        }
+                        : await _backupReceiver.CompleteSessionAsync(manifest);
 
                 await SendPacketToAgentAsync(packet.AgentID, client, new SocketPacket
                 {
@@ -349,7 +360,15 @@ namespace AgentControl
                 BackupFirstFileResumeQuery? query = JsonSerializer.Deserialize<BackupFirstFileResumeQuery>(packet.Data);
                 BackupFirstFileResumeInfo info = query == null
                     ? new BackupFirstFileResumeInfo { Success = false, Message = "Yêu cầu resume FIRST không hợp lệ." }
-                    : await _backupReceiver.GetFirstFileResumeInfoAsync(query);
+                    : !IsBackupPayloadAgent(packet.AgentID, query.AgentID)
+                        ? new BackupFirstFileResumeInfo
+                        {
+                            SessionName = query.SessionName,
+                            SourcePath = query.SourcePath,
+                            Success = false,
+                            Message = "AgentID trong yêu cầu resume không khớp kết nối đã xác thực."
+                        }
+                        : await _backupReceiver.GetFirstFileResumeInfoAsync(query);
 
                 await SendPacketToAgentAsync(packet.AgentID, client, new SocketPacket
                 {
@@ -367,11 +386,25 @@ namespace AgentControl
                 {
                     throw new InvalidDataException("Thông tin file FIRST bỏ qua không hợp lệ.");
                 }
+                EnsureBackupPayloadAgent(packet.AgentID, skipped.AgentID);
                 await _backupReceiver.SkipFirstFileAsync(skipped);
                 return true;
             }
 
             return false;
+        }
+
+        private static bool IsBackupPayloadAgent(string authenticatedAgentId, string payloadAgentId) =>
+            !string.IsNullOrWhiteSpace(payloadAgentId) &&
+            payloadAgentId.Equals(authenticatedAgentId, StringComparison.OrdinalIgnoreCase);
+
+        private static void EnsureBackupPayloadAgent(string authenticatedAgentId, string payloadAgentId)
+        {
+            if (!IsBackupPayloadAgent(authenticatedAgentId, payloadAgentId))
+            {
+                throw new InvalidDataException(
+                    "AgentID trong dữ liệu backup không khớp kết nối đã xác thực.");
+            }
         }
 
         private void BackupTree_AfterCheck(object? sender, TreeViewEventArgs e)

@@ -1,4 +1,6 @@
+using AgentShared;
 using System.Text.Json;
+using System.Security.Cryptography;
 
 namespace AgentControl
 {
@@ -139,7 +141,8 @@ namespace AgentControl
                 SourceSessionRoot = file.SourceSessionRoot,
                 RelativeStoragePath = file.RelativeStoragePath,
                 Size = file.Size,
-                LastWriteTimeUtc = file.LastWriteTimeUtc
+                LastWriteTimeUtc = file.LastWriteTimeUtc,
+                ContentSha256 = file.ContentSha256
             };
             bool canResume = File.Exists(temporaryPath) &&
                              TryReadMatchingMetadata(metadataPath, expectedMetadata);
@@ -180,6 +183,17 @@ namespace AgentControl
             await destination.FlushAsync(token);
             destination.Close();
 
+            if (IsSha256(file.ContentSha256))
+            {
+                string restoredHash = await ComputeSha256Async(temporaryPath, token);
+                if (!string.Equals(restoredHash, file.ContentSha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    File.Delete(temporaryPath);
+                    if (File.Exists(metadataPath)) File.Delete(metadataPath);
+                    throw new InvalidDataException("SHA-256 file khôi phục không khớp manifest.");
+                }
+            }
+
             File.SetLastWriteTimeUtc(temporaryPath, file.LastWriteTimeUtc);
             File.Move(temporaryPath, destinationPath, overwrite: true);
             if (File.Exists(metadataPath)) File.Delete(metadataPath);
@@ -196,12 +210,28 @@ namespace AgentControl
                        actual.SourceSessionRoot.Equals(expected.SourceSessionRoot, StringComparison.OrdinalIgnoreCase) &&
                        actual.RelativeStoragePath.Equals(expected.RelativeStoragePath, StringComparison.OrdinalIgnoreCase) &&
                        actual.Size == expected.Size &&
-                       actual.LastWriteTimeUtc == expected.LastWriteTimeUtc;
+                       actual.LastWriteTimeUtc == expected.LastWriteTimeUtc &&
+                       actual.ContentSha256.Equals(expected.ContentSha256, StringComparison.OrdinalIgnoreCase);
             }
             catch
             {
                 return false;
             }
+        }
+
+        private static bool IsSha256(string value) =>
+            value != null && value.Length == 64 && value.All(Uri.IsHexDigit);
+
+        private static async Task<string> ComputeSha256Async(string path, CancellationToken token)
+        {
+            await using FileStream source = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                BufferSize,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            return Convert.ToHexString(await SHA256.HashDataAsync(source, token));
         }
 
         private static async Task WriteMetadataAsync(
@@ -214,22 +244,7 @@ namespace AgentControl
 
         private static string GetSafeChildPath(string root, string relativePath)
         {
-            string relative = (relativePath ?? string.Empty)
-                .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
-                .TrimStart(Path.DirectorySeparatorChar);
-            if (string.IsNullOrWhiteSpace(relative) || Path.IsPathRooted(relative) ||
-                relative.Split(Path.DirectorySeparatorChar).Any(part => part == ".."))
-            {
-                throw new InvalidDataException("Đường dẫn tương đối của file restore không hợp lệ.");
-            }
-
-            string fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            string fullPath = Path.GetFullPath(Path.Combine(fullRoot, relative));
-            if (!fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidDataException("Đường dẫn restore vượt ra ngoài thư mục đích.");
-            }
-            return fullPath;
+            return PathSafety.GetSafeChildPath(root, relativePath);
         }
     }
 
@@ -257,5 +272,6 @@ namespace AgentControl
         public string RelativeStoragePath { get; set; } = string.Empty;
         public long Size { get; set; }
         public DateTime LastWriteTimeUtc { get; set; }
+        public string ContentSha256 { get; set; } = string.Empty;
     }
 }

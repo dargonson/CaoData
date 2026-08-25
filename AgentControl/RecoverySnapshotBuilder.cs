@@ -45,8 +45,7 @@ namespace AgentControl
             DateTime targetDate = selectedDate.Date;
             RecoveryBackupSession? baseFull = allSessions
                 .Where(session => session.Type == RecoverySessionType.First && session.Date.Date <= targetDate)
-                .OrderBy(session => session.Date)
-                .ThenBy(session => session.ManifestWriteTimeUtc)
+                .OrderBy(session => session.CompletedAtUtc)
                 .LastOrDefault();
             if (baseFull == null)
             {
@@ -57,11 +56,8 @@ namespace AgentControl
             replaySessions.AddRange(allSessions
                 .Where(session => session.Type == RecoverySessionType.Incremental &&
                                   session.Date.Date <= targetDate &&
-                                  (session.Date.Date > baseFull.Date.Date ||
-                                   (session.Date.Date == baseFull.Date.Date &&
-                                    session.ManifestWriteTimeUtc > baseFull.ManifestWriteTimeUtc)))
-                .OrderBy(session => session.Date)
-                .ThenBy(session => session.ManifestWriteTimeUtc));
+                                  session.CompletedAtUtc > baseFull.CompletedAtUtc)
+                .OrderBy(session => session.CompletedAtUtc));
 
             string signature = CreateSignature(replaySessions);
             if (!await _repository.IsCurrentAsync(agentId, targetDate, signature))
@@ -149,6 +145,19 @@ namespace AgentControl
                     continue;
                 }
 
+                BackupSessionMetadata metadata = BackupSessionMetadataStore.ReadVerified(
+                    directory,
+                    manifestPath,
+                    token);
+                string expectedType = type == RecoverySessionType.First ? "FIRST" : "INC";
+                if (!metadata.AgentID.Equals(agentId, StringComparison.OrdinalIgnoreCase) ||
+                    !metadata.SessionName.Equals(name, StringComparison.OrdinalIgnoreCase) ||
+                    !metadata.BackupType.Equals(expectedType, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException(
+                        $"Metadata không khớp tên/Agent của thư mục backup: {name}");
+                }
+
                 sessions.Add(new RecoveryBackupSession
                 {
                     Name = name,
@@ -156,7 +165,8 @@ namespace AgentControl
                     Date = date,
                     SessionRoot = Path.GetFullPath(directory),
                     ManifestPath = manifestPath,
-                    ManifestWriteTimeUtc = File.GetLastWriteTimeUtc(manifestPath)
+                    CompletedAtUtc = metadata.CompletedAtUtc,
+                    ManifestSha256 = metadata.ManifestSha256
                 });
             }
             return sessions;
@@ -167,10 +177,9 @@ namespace AgentControl
             StringBuilder value = new StringBuilder();
             foreach (RecoveryBackupSession session in sessions)
             {
-                FileInfo manifest = new FileInfo(session.ManifestPath);
                 value.Append(session.Name).Append('|')
-                    .Append(manifest.Length).Append('|')
-                    .Append(manifest.LastWriteTimeUtc.Ticks).AppendLine();
+                    .Append(session.CompletedAtUtc.Ticks).Append('|')
+                    .Append(session.ManifestSha256).AppendLine();
             }
             return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.ToString())));
         }
@@ -271,6 +280,7 @@ namespace AgentControl
                                 {
                                     case "SourcePath": entry.SourcePath = text; break;
                                     case "RelativeStoragePath": entry.RelativeStoragePath = text; break;
+                                    case "ContentSha256": entry.ContentSha256 = text; break;
                                     case "LastWriteTimeUtc":
                                         if (DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTime parsed))
                                         {
@@ -320,6 +330,109 @@ namespace AgentControl
                 ArrayPool<byte>.Shared.Return(buffer);
             }
         }
+
+        public static BackupManifestMetadata ReadMetadata(
+            string manifestPath,
+            CancellationToken token = default)
+        {
+            const int initialBufferSize = 128 * 1024;
+            byte[] buffer = ArrayPool<byte>.Shared.Rent(initialBufferSize);
+            try
+            {
+                using FileStream stream = new FileStream(
+                    manifestPath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read,
+                    initialBufferSize,
+                    FileOptions.SequentialScan);
+                JsonReaderState state = new JsonReaderState(new JsonReaderOptions
+                {
+                    AllowTrailingCommas = true,
+                    CommentHandling = JsonCommentHandling.Skip
+                });
+                BackupManifestMetadata metadata = new BackupManifestMetadata();
+                int preserved = 0;
+                string rootProperty = string.Empty;
+
+                while (true)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (preserved == buffer.Length)
+                    {
+                        byte[] larger = ArrayPool<byte>.Shared.Rent(checked(buffer.Length * 2));
+                        Buffer.BlockCopy(buffer, 0, larger, 0, preserved);
+                        ArrayPool<byte>.Shared.Return(buffer);
+                        buffer = larger;
+                    }
+
+                    int read = stream.Read(buffer, preserved, buffer.Length - preserved);
+                    int total = preserved + read;
+                    bool isFinal = read == 0;
+                    Utf8JsonReader reader = new Utf8JsonReader(
+                        new ReadOnlySpan<byte>(buffer, 0, total),
+                        isFinal,
+                        state);
+
+                    while (reader.Read())
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (reader.TokenType == JsonTokenType.PropertyName && reader.CurrentDepth == 1)
+                        {
+                            rootProperty = reader.GetString() ?? string.Empty;
+                            continue;
+                        }
+
+                        if (reader.CurrentDepth != 1 || reader.TokenType != JsonTokenType.String)
+                        {
+                            continue;
+                        }
+
+                        string value = reader.GetString() ?? string.Empty;
+                        switch (rootProperty)
+                        {
+                            case "AgentID": metadata.AgentID = value; break;
+                            case "SessionName": metadata.SessionName = value; break;
+                            case "BackupType": metadata.BackupType = value; break;
+                            case "StartedAtUtc":
+                                if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTime started))
+                                {
+                                    metadata.StartedAtUtc = started;
+                                }
+                                break;
+                            case "CompletedAtUtc":
+                                if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTime completed))
+                                {
+                                    metadata.CompletedAtUtc = completed;
+                                }
+                                break;
+                        }
+                    }
+
+                    int consumed = checked((int)reader.BytesConsumed);
+                    preserved = total - consumed;
+                    if (preserved > 0)
+                    {
+                        Buffer.BlockCopy(buffer, consumed, buffer, 0, preserved);
+                    }
+                    state = reader.CurrentState;
+                    if (isFinal)
+                    {
+                        if (preserved != 0)
+                        {
+                            throw new JsonException("Manifest kết thúc khi metadata JSON chưa hoàn chỉnh.");
+                        }
+                        break;
+                    }
+                }
+
+                return metadata;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
     }
 
     internal enum ManifestEntrySection
@@ -328,6 +441,15 @@ namespace AgentControl
         Created,
         Modified,
         Deleted
+    }
+
+    internal sealed class BackupManifestMetadata
+    {
+        public string AgentID { get; set; } = string.Empty;
+        public string SessionName { get; set; } = string.Empty;
+        public string BackupType { get; set; } = string.Empty;
+        public DateTime StartedAtUtc { get; set; }
+        public DateTime CompletedAtUtc { get; set; }
     }
 
     internal enum RecoverySessionType
@@ -343,7 +465,8 @@ namespace AgentControl
         public DateTime Date { get; set; }
         public string SessionRoot { get; set; } = string.Empty;
         public string ManifestPath { get; set; } = string.Empty;
-        public DateTime ManifestWriteTimeUtc { get; set; }
+        public DateTime CompletedAtUtc { get; set; }
+        public string ManifestSha256 { get; set; } = string.Empty;
     }
 
     internal sealed class RecoveryPointDate

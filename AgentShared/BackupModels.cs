@@ -62,6 +62,8 @@ namespace AgentShared
         public int ChunkSize { get; set; }
         public bool IsLastChunk { get; set; }
         public DateTime LastWriteTimeUtc { get; set; }
+        // BO SUNG MODULE BACKUP: SHA-256 cua toan bo file, chi bat buoc o chunk cuoi.
+        public string ContentSha256 { get; set; } = string.Empty;
     }
 
     public sealed class BackupManifest
@@ -87,12 +89,16 @@ namespace AgentShared
         public string RelativeStoragePath { get; set; } = string.Empty;
         public long Size { get; set; }
         public DateTime LastWriteTimeUtc { get; set; }
+        public string ContentSha256 { get; set; } = string.Empty;
     }
 
     public sealed class BackupSessionResult
     {
         public string SessionName { get; set; } = string.Empty;
         public bool Success { get; set; }
+        // BO SUNG MODULE BACKUP - SYNTHETIC FULL:
+        // INC co the da commit thanh cong trong khi buoc tong hop Full can thu lai vao ky sau.
+        public bool SyntheticFullCompleted { get; set; } = true;
         public string Message { get; set; } = string.Empty;
     }
 
@@ -115,6 +121,7 @@ namespace AgentShared
         public bool Completed { get; set; }
         public bool Skipped { get; set; }
         public long Offset { get; set; }
+        public string ContentSha256 { get; set; } = string.Empty;
         public string Message { get; set; } = string.Empty;
     }
 

@@ -36,23 +36,38 @@ namespace AgentControl
                 Directory.Exists(completedStoragePath) &&
                 File.Exists(Path.Combine(completedStoragePath, "manifest.json")))
             {
+                BackupSessionMetadataStore.ReadVerifiedSession(
+                    completedStoragePath,
+                    Path.Combine(completedStoragePath, "manifest.json"),
+                    sourceManifest.AgentID,
+                    sessionName,
+                    "FIRST",
+                    requireSidecar: false,
+                    token);
                 return new SyntheticFullResult(sessionName, completedStoragePath, 0, 0, true);
             }
 
             if (Directory.Exists(finalRoot))
             {
                 // Neu mat dien sau luc doi ten thu muc nhung truoc khi commit DB,
-                // manifest hoan chinh la dau hieu an toan de khoi phuc moc Synthetic Full.
+                // manifest + sidecar da xac minh la dau hieu an toan de khoi phuc moc Full.
                 if (File.Exists(Path.Combine(finalRoot, "manifest.json")))
                 {
-                    DateTime recoveredAtUtc = DateTime.UtcNow;
+                    BackupSessionMetadata metadata = BackupSessionMetadataStore.ReadVerifiedSession(
+                        finalRoot,
+                        Path.Combine(finalRoot, "manifest.json"),
+                        sourceManifest.AgentID,
+                        sessionName,
+                        "FIRST",
+                        requireSidecar: true,
+                        token);
                     string recoveredMessage = "Synthetic Full đã hoàn tất trên đĩa và được khôi phục trạng thái vào DB.";
                     await BackupRepository.SaveSyntheticFullAsync(
                         sourceManifest.AgentID,
                         sessionName,
                         finalRoot,
-                        sourceManifest.StartedAtUtc,
-                        recoveredAtUtc,
+                        metadata.StartedAtUtc,
+                        metadata.CompletedAtUtc,
                         recoveredMessage);
                     return new SyntheticFullResult(sessionName, finalRoot, 0, 0, true);
                 }
@@ -73,6 +88,7 @@ namespace AgentControl
             DateTime startedAtUtc = DateTime.UtcNow;
             long fileCount = 0;
             long copiedFileCount = 0;
+            DateTime completedAtUtc = default;
             string manifestTempPath = Path.Combine(buildRoot, "manifest.json.tmp");
             string manifestPath = Path.Combine(buildRoot, "manifest.json");
 
@@ -121,7 +137,8 @@ namespace AgentControl
                             SourcePath = record.SourcePath,
                             RelativeStoragePath = record.RelativeStoragePath,
                             Size = record.Size,
-                            LastWriteTimeUtc = record.LastWriteTimeUtc
+                            LastWriteTimeUtc = record.LastWriteTimeUtc,
+                            ContentSha256 = record.ContentSha256
                         });
                     }
 
@@ -140,16 +157,26 @@ namespace AgentControl
                 writer.WritePropertyName("Errors");
                 writer.WriteStartArray();
                 writer.WriteEndArray();
-                writer.WriteString("CompletedAtUtc", DateTime.UtcNow);
+                completedAtUtc = DateTime.UtcNow;
+                writer.WriteString("CompletedAtUtc", completedAtUtc);
                 writer.WriteEndObject();
                 writer.Flush();
                 await manifestStream.FlushAsync(token);
+                manifestStream.Flush(flushToDisk: true);
             }
 
             File.Move(manifestTempPath, manifestPath);
+            await BackupSessionMetadataStore.WriteAsync(
+                buildRoot,
+                manifestPath,
+                sourceManifest.AgentID,
+                sessionName,
+                "FIRST",
+                startedAtUtc,
+                completedAtUtc,
+                token);
             Directory.Move(buildRoot, finalRoot);
 
-            DateTime completedAtUtc = DateTime.UtcNow;
             string message = $"Synthetic Full hoàn tất: {fileCount} file, hard link {fileCount - copiedFileCount}, copy {copiedFileCount}.";
             await BackupRepository.SaveSyntheticFullAsync(
                 sourceManifest.AgentID,
@@ -210,6 +237,7 @@ namespace AgentControl
             {
                 await source.CopyToAsync(destination, 1024 * 1024, token);
                 await destination.FlushAsync(token);
+                destination.Flush(flushToDisk: true);
             }
             File.SetLastWriteTimeUtc(destinationPath, record.LastWriteTimeUtc);
             return true;
@@ -253,27 +281,12 @@ namespace AgentControl
 
         private static string NormalizeRelativePath(string relativePath)
         {
-            string value = (relativePath ?? string.Empty)
-                .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
-                .TrimStart(Path.DirectorySeparatorChar);
-            if (string.IsNullOrWhiteSpace(value) || Path.IsPathRooted(value))
-            {
-                throw new InvalidDataException("Đường dẫn tương đối trong inventory không hợp lệ.");
-            }
-
-            return value;
+            return PathSafety.NormalizeRelativePath(relativePath);
         }
 
         private static string GetSafeChildPath(string root, string child)
         {
-            string fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            string fullPath = Path.GetFullPath(Path.Combine(fullRoot, child));
-            if (!fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidDataException("Đường dẫn Synthetic Full vượt ra ngoài thư mục backup.");
-            }
-
-            return fullPath;
+            return PathSafety.GetSafeChildPath(root, child);
         }
 
         private static string SanitizeFileName(string value)

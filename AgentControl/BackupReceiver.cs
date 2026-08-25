@@ -3,6 +3,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,6 +21,20 @@ namespace AgentControl
 
         public async Task BeginSessionAsync(BackupSessionBegin request)
         {
+            if (string.IsNullOrWhiteSpace(request.AgentID) ||
+                request.StartedAtUtc == default ||
+                request.PlannedFileCount < 0 ||
+                request.PlannedTotalBytes < 0)
+            {
+                throw new InvalidDataException("Metadata mở phiên backup không hợp lệ.");
+            }
+
+            string backupType = (request.BackupType ?? string.Empty).Trim().ToUpperInvariant();
+            if (backupType != "FIRST" && backupType != "INC")
+            {
+                throw new InvalidDataException("Loại phiên backup không hợp lệ.");
+            }
+
             BackupConfiguration? config = await BackupRepository.GetConfigAsync(request.AgentID);
             if (config == null || !config.Enabled)
             {
@@ -35,8 +50,7 @@ namespace AgentControl
             string storageRoot = Path.GetFullPath(config.ControlStoragePath);
             Directory.CreateDirectory(storageRoot);
 
-            bool resumableFirst = request.IsResumableFirst &&
-                                  request.BackupType.Equals("FIRST", StringComparison.OrdinalIgnoreCase);
+            bool resumableFirst = request.IsResumableFirst && backupType == "FIRST";
             string folderName = resumableFirst ? sessionName + ".inprogress" : sessionName;
             string sessionRoot = GetSafeChildPath(storageRoot, folderName);
             bool alreadyCompleted = false;
@@ -44,29 +58,74 @@ namespace AgentControl
             if (resumableFirst)
             {
                 CompletedFirstRun? completedRun = await FirstBackupStore.GetCompletedRunAsync(request.AgentID);
-                if (completedRun != null &&
-                    Directory.Exists(completedRun.StoragePath) &&
-                    File.Exists(Path.Combine(completedRun.StoragePath, "manifest.json")))
+                if (completedRun != null && IsSameFirstPlan(completedRun, request))
                 {
-                    if (completedRun.Status.Equals("Finalizing", StringComparison.OrdinalIgnoreCase))
+                    string expectedFinalPath = GetSafeChildPath(
+                        storageRoot,
+                        Path.GetFileName(completedRun.StoragePath));
+                    string expectedWorkingPath = GetSafeChildPath(
+                        storageRoot,
+                        Path.GetFileName(completedRun.WorkingPath));
+
+                    if (completedRun.Status.Equals("Finalizing", StringComparison.OrdinalIgnoreCase) &&
+                        !Directory.Exists(expectedFinalPath) &&
+                        Directory.Exists(expectedWorkingPath))
                     {
-                        DateTime recoveredAtUtc = DateTime.UtcNow;
-                        await FirstBackupStore.FinalizeRunAsync(
+                        ValidateCompletedFirstArtifacts(
+                            expectedWorkingPath,
                             request.AgentID,
                             completedRun.SessionName,
-                            completedRun.StoragePath,
-                            request.StartedAtUtc,
-                            recoveredAtUtc,
-                            "FIRST được khôi phục sau khi mất điện ở bước chốt DB.");
+                            requireSidecar: true);
+                        Directory.Move(expectedWorkingPath, expectedFinalPath);
                     }
-                    sessionRoot = completedRun.StoragePath;
-                    alreadyCompleted = true;
+
+                    if (Directory.Exists(expectedFinalPath))
+                    {
+                        ValidateCompletedFirstArtifacts(
+                            expectedFinalPath,
+                            request.AgentID,
+                            completedRun.SessionName,
+                            requireSidecar: completedRun.Status.Equals(
+                                "Finalizing",
+                                StringComparison.OrdinalIgnoreCase));
+                        if (completedRun.Status.Equals("Finalizing", StringComparison.OrdinalIgnoreCase))
+                        {
+                            BackupSessionMetadata metadata = BackupSessionMetadataStore.ReadVerifiedSession(
+                                expectedFinalPath,
+                                Path.Combine(expectedFinalPath, "manifest.json"),
+                                request.AgentID,
+                                completedRun.SessionName,
+                                "FIRST",
+                                requireSidecar: true);
+                            await FirstBackupStore.FinalizeRunAsync(
+                                request.AgentID,
+                                completedRun.SessionName,
+                                expectedFinalPath,
+                                metadata.StartedAtUtc,
+                                metadata.CompletedAtUtc,
+                                "FIRST được khôi phục sau khi mất điện ở bước chốt DB.");
+                        }
+                        sessionRoot = expectedFinalPath;
+                        alreadyCompleted = true;
+                    }
+                    else if (completedRun.Status.Equals("Completed", StringComparison.OrdinalIgnoreCase) ||
+                             completedRun.Status.Equals("Finalizing", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidDataException(
+                            "DB ghi nhận FIRST đã chốt nhưng không tìm thấy thư mục backup hoàn chỉnh. " +
+                            "Không tự tạo lại để tránh che lấp mất dữ liệu.");
+                    }
                 }
-                else
+
+                if (!alreadyCompleted)
                 {
+                    bool isNewPlan = await FirstBackupStore.BeginRunAsync(request, sessionRoot);
+                    if (isNewPlan && Directory.Exists(sessionRoot))
+                    {
+                        Directory.Delete(sessionRoot, recursive: true);
+                    }
                     Directory.CreateDirectory(sessionRoot);
                     Directory.CreateDirectory(Path.Combine(sessionRoot, "Files"));
-                    await FirstBackupStore.BeginRunAsync(request, sessionRoot);
                 }
             }
             else
@@ -79,6 +138,7 @@ namespace AgentControl
                 request.AgentID,
                 sessionName,
                 sessionRoot,
+                backupType,
                 resumableFirst,
                 request.StartedAtUtc,
                 alreadyCompleted);
@@ -127,7 +187,8 @@ namespace AgentControl
                         SourcePath = query.SourcePath,
                         Success = true,
                         Completed = true,
-                        Offset = query.TotalBytes
+                        Offset = query.TotalBytes,
+                        ContentSha256 = registration.ContentSha256
                     };
                 }
 
@@ -198,7 +259,10 @@ namespace AgentControl
                     skipped.Reason,
                     AtUtc = DateTime.UtcNow
                 }) + Environment.NewLine;
-                await File.AppendAllTextAsync(Path.Combine(session.SessionRoot, "manifest.journal"), journalLine, token);
+                await AppendJournalLineAsync(
+                    Path.Combine(session.SessionRoot, "manifest.journal"),
+                    journalLine,
+                    token);
             }
             finally
             {
@@ -206,10 +270,20 @@ namespace AgentControl
             }
         }
 
-        public async Task HandleFileChunkAsync(Stream stream, int frameSize, CancellationToken token = default)
+        public async Task HandleFileChunkAsync(
+            Stream stream,
+            int frameSize,
+            string authenticatedAgentId,
+            CancellationToken token = default)
         {
             (BackupFileChunkHeader header, int bodySize) =
                 await TransferFrameProtocol.ReadBackupChunkHeaderAsync(stream, frameSize, token);
+
+            if (!string.Equals(header.AgentID, authenticatedAgentId, StringComparison.OrdinalIgnoreCase))
+            {
+                await TransferFrameProtocol.DrainExactAsync(stream, bodySize, token);
+                throw new InvalidDataException("AgentID của chunk backup không khớp kết nối đã xác thực.");
+            }
 
             if (!_sessions.TryGetValue(header.AgentID, out ActiveBackupSession? session) ||
                 !session.SessionName.Equals(header.SessionName, StringComparison.OrdinalIgnoreCase))
@@ -224,10 +298,23 @@ namespace AgentControl
                 throw new InvalidDataException("Kích thước binary chunk backup không hợp lệ.");
             }
 
+            if (header.TotalBytes < 0 || header.Offset < 0 ||
+                header.Offset > header.TotalBytes ||
+                bodySize > header.TotalBytes - header.Offset ||
+                (header.IsLastChunk && header.Offset + bodySize != header.TotalBytes) ||
+                (!header.IsLastChunk && header.Offset + bodySize >= header.TotalBytes) ||
+                (header.IsLastChunk && !IsSha256(header.ContentSha256)))
+            {
+                await TransferFrameProtocol.DrainExactAsync(stream, bodySize, token);
+                throw new InvalidDataException("Metadata chunk backup không hợp lệ.");
+            }
+
             string relativePath = NormalizeRelativePath(header.RelativeStoragePath);
             string fileRoot = Path.Combine(session.SessionRoot, "Files");
             string finalPath = GetSafeChildPath(fileRoot, relativePath);
-            string destinationPath = session.IsResumableFirst ? finalPath + ".partial" : finalPath;
+            // Ghi moi loai backup vao file tam. Khi chunk cuoi hop le moi replace file
+            // chinh, de retry INC khong ghi truc tiep vao inode/hard-link cua Synthetic Full.
+            string destinationPath = finalPath + (session.IsResumableFirst ? ".partial" : ".incoming");
             string? destinationFolder = Path.GetDirectoryName(destinationPath);
             if (!string.IsNullOrWhiteSpace(destinationFolder))
             {
@@ -237,50 +324,61 @@ namespace AgentControl
             await session.WriteLock.WaitAsync(token);
             try
             {
-                {
-                    if (session.IsResumableFirst)
-                    {
-                        long actualOffset = File.Exists(destinationPath) ? new FileInfo(destinationPath).Length : 0;
-                        if (actualOffset != header.Offset)
-                        {
-                            await TransferFrameProtocol.DrainExactAsync(stream, bodySize, token);
-                            throw new InvalidDataException($"Offset FIRST không khớp. Control={actualOffset}, Agent={header.Offset}.");
-                        }
-                    }
-
-                    using FileStream destination = new FileStream(
-                        destinationPath,
-                        FileMode.OpenOrCreate,
-                        FileAccess.Write,
-                        FileShare.Read,
-                        128 * 1024,
-                        useAsync: true);
-                    destination.Seek(Math.Max(0, header.Offset), SeekOrigin.Begin);
-                    await TransferFrameProtocol.CopyExactToAsync(stream, destination, bodySize, token);
-
-                    if (header.IsLastChunk)
-                    {
-                        destination.SetLength(Math.Max(0, header.TotalBytes));
-                    }
-                }
+                await ResumableTransferFile.WriteChunkAsync(
+                    stream,
+                    destinationPath,
+                    header.Offset,
+                    header.TotalBytes,
+                    bodySize,
+                    header.IsLastChunk,
+                    token);
 
                 if (header.IsLastChunk)
                 {
+                    string actualHash = await ComputeSha256Async(destinationPath, token);
+                    if (!string.Equals(actualHash, header.ContentSha256, StringComparison.OrdinalIgnoreCase))
+                    {
+                        File.Delete(destinationPath);
+                        if (session.IsResumableFirst)
+                        {
+                            await FirstBackupStore.UpdateProgressAsync(header.AgentID, header.SourcePath, 0);
+                        }
+                        throw new InvalidDataException("SHA-256 file backup không khớp; file tạm đã được reset.");
+                    }
+
                     File.SetLastWriteTimeUtc(destinationPath, header.LastWriteTimeUtc);
+                    File.Move(destinationPath, finalPath, overwrite: true);
                     if (session.IsResumableFirst)
                     {
-                        if (File.Exists(finalPath)) File.Delete(finalPath);
-                        File.Move(destinationPath, finalPath);
                         BackupManifestEntry journalEntry = new BackupManifestEntry
                         {
                             SourcePath = header.SourcePath,
                             RelativeStoragePath = relativePath,
                             Size = header.TotalBytes,
-                            LastWriteTimeUtc = header.LastWriteTimeUtc
+                            LastWriteTimeUtc = header.LastWriteTimeUtc,
+                            ContentSha256 = header.ContentSha256
                         };
                         string journalLine = JsonSerializer.Serialize(journalEntry) + Environment.NewLine;
-                        await File.AppendAllTextAsync(Path.Combine(session.SessionRoot, "manifest.journal"), journalLine, token);
-                        await FirstBackupStore.MarkCompletedAsync(header.AgentID, header.SourcePath, header.TotalBytes);
+                        await AppendJournalLineAsync(
+                            Path.Combine(session.SessionRoot, "manifest.journal"),
+                            journalLine,
+                            token);
+                        await FirstBackupStore.MarkCompletedAsync(
+                            header.AgentID,
+                            header.SourcePath,
+                            header.TotalBytes,
+                            header.ContentSha256);
+                    }
+                    else
+                    {
+                        session.ReceivedFiles[relativePath] = new BackupManifestEntry
+                        {
+                            SourcePath = header.SourcePath,
+                            RelativeStoragePath = relativePath,
+                            Size = header.TotalBytes,
+                            LastWriteTimeUtc = header.LastWriteTimeUtc,
+                            ContentSha256 = header.ContentSha256
+                        };
                     }
                 }
                 else if (session.IsResumableFirst && (header.Offset + bodySize) % (8 * 1024 * 1024) == 0)
@@ -292,6 +390,24 @@ namespace AgentControl
             {
                 session.WriteLock.Release();
             }
+        }
+
+        private static bool IsSha256(string value)
+        {
+            return value != null && value.Length == 64 && value.All(Uri.IsHexDigit);
+        }
+
+        private static async Task<string> ComputeSha256Async(string path, CancellationToken token)
+        {
+            await using FileStream source = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                1024 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            byte[] hash = await SHA256.HashDataAsync(source, token);
+            return Convert.ToHexString(hash);
         }
 
         public async Task<BackupSessionResult> CompleteSessionAsync(BackupManifest manifest)
@@ -309,6 +425,11 @@ namespace AgentControl
 
             try
             {
+                if (!string.Equals(manifest.BackupType, session.BackupType, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException("Loại manifest không khớp phiên backup đã mở.");
+                }
+
                 manifest.CompletedAtUtc = manifest.CompletedAtUtc == default
                     ? DateTime.UtcNow
                     : manifest.CompletedAtUtc;
@@ -318,9 +439,18 @@ namespace AgentControl
                     return await CompleteResumableFirstAsync(manifest, session);
                 }
 
+                ValidateReceivedManifest(session, manifest);
+
                 string manifestPath = Path.Combine(session.SessionRoot, "manifest.json");
-                JsonSerializerOptions options = new JsonSerializerOptions { WriteIndented = true };
-                await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, options));
+                await WriteManifestAtomicallyAsync(manifestPath, manifest);
+                await BackupSessionMetadataStore.WriteAsync(
+                    session.SessionRoot,
+                    manifestPath,
+                    manifest.AgentID,
+                    manifest.SessionName,
+                    session.BackupType,
+                    manifest.StartedAtUtc,
+                    manifest.CompletedAtUtc);
 
                 string message = manifest.Errors.Count == 0
                     ? "Backup hoàn tất."
@@ -330,27 +460,40 @@ namespace AgentControl
 
                 // BO SUNG MODULE BACKUP - SYNTHETIC FULL:
                 // Sau phien INC cuoi chu ky, Control tu dung FIRST moi tu inventory hien tai.
+                bool syntheticFullCompleted = true;
                 if (manifest.CreateSyntheticFull)
                 {
-                    string? storageRoot = Path.GetDirectoryName(session.SessionRoot);
-                    if (string.IsNullOrWhiteSpace(storageRoot))
+                    try
                     {
-                        throw new InvalidDataException("Không xác định được thư mục gốc để tạo Synthetic Full.");
-                    }
+                        string? storageRoot = Path.GetDirectoryName(session.SessionRoot);
+                        if (string.IsNullOrWhiteSpace(storageRoot))
+                        {
+                            throw new InvalidDataException("Không xác định được thư mục gốc để tạo Synthetic Full.");
+                        }
 
-                    SyntheticFullResult syntheticResult = await _syntheticFullBuilder.BuildAsync(
-                        manifest,
-                        storageRoot);
-                    message = syntheticResult.AlreadyCompleted
-                        ? $"Backup hoàn tất. Synthetic Full {syntheticResult.SessionName} đã tồn tại."
-                        : $"Backup hoàn tất và đã tạo {syntheticResult.SessionName}: " +
-                          $"{syntheticResult.FileCount} file, copy {syntheticResult.CopiedFileCount} file.";
+                        SyntheticFullResult syntheticResult = await _syntheticFullBuilder.BuildAsync(
+                            manifest,
+                            storageRoot);
+                        message = syntheticResult.AlreadyCompleted
+                            ? $"Backup hoàn tất. Synthetic Full {syntheticResult.SessionName} đã tồn tại."
+                            : $"Backup hoàn tất và đã tạo {syntheticResult.SessionName}: " +
+                              $"{syntheticResult.FileCount} file, copy {syntheticResult.CopiedFileCount} file.";
+                    }
+                    catch (Exception syntheticError)
+                    {
+                        // INC va inventory da duoc commit o tren. Khong duoc danh dau lai INC la
+                        // that bai, neu khong Agent va Control se giu hai inventory khac nhau.
+                        syntheticFullCompleted = false;
+                        message = "Backup INC đã hoàn tất nhưng chưa tạo được Synthetic Full; " +
+                                  $"hệ thống sẽ thử lại ở kỳ backup sau. Lỗi: {syntheticError.Message}";
+                    }
                 }
 
                 return new BackupSessionResult
                 {
                     SessionName = manifest.SessionName,
                     Success = true,
+                    SyntheticFullCompleted = syntheticFullCompleted,
                     Message = message
                 };
             }
@@ -384,8 +527,9 @@ namespace AgentControl
                 };
             }
 
-            (long planned, long completed) = await FirstBackupStore.GetRunCountsAsync(manifest.AgentID);
-            if (planned <= 0 || completed != planned)
+            (bool runExists, long planned, long completed) =
+                await FirstBackupStore.GetRunCountsAsync(manifest.AgentID);
+            if (!runExists || completed != planned)
             {
                 return new BackupSessionResult
                 {
@@ -396,19 +540,26 @@ namespace AgentControl
             }
 
             DateTime completedAtUtc = DateTime.UtcNow;
-            string finalSessionName = $"FIRST-{SanitizeSessionName(manifest.AgentID)}-{completedAtUtc.ToLocalTime():yyyy-MM-dd}";
             string storageRoot = Path.GetDirectoryName(session.SessionRoot)
                 ?? throw new InvalidDataException("Không xác định được thư mục gốc FIRST.");
+            string finalSessionName = CreateAvailableFirstSessionName(
+                storageRoot,
+                manifest.AgentID,
+                completedAtUtc.ToLocalTime().Date);
             string finalRoot = GetSafeChildPath(storageRoot, finalSessionName);
-            if (Directory.Exists(finalRoot))
-            {
-                throw new IOException($"Thư mục FIRST hoàn tất đã tồn tại: {finalRoot}");
-            }
 
             string tempManifest = Path.Combine(session.SessionRoot, "manifest.json.tmp");
             string finalManifest = Path.Combine(session.SessionRoot, "manifest.json");
             await WriteFirstManifestAsync(manifest, finalSessionName, session.StartedAtUtc, completedAtUtc, tempManifest);
             File.Move(tempManifest, finalManifest, overwrite: true);
+            await BackupSessionMetadataStore.WriteAsync(
+                session.SessionRoot,
+                finalManifest,
+                manifest.AgentID,
+                finalSessionName,
+                "FIRST",
+                session.StartedAtUtc,
+                completedAtUtc);
             await FirstBackupStore.MarkFinalizingAsync(manifest.AgentID, finalSessionName, finalRoot);
             Directory.Move(session.SessionRoot, finalRoot);
 
@@ -477,6 +628,50 @@ namespace AgentControl
             writer.WriteEndObject();
             writer.Flush();
             await stream.FlushAsync();
+            stream.Flush(flushToDisk: true);
+        }
+
+        private static async Task AppendJournalLineAsync(
+            string journalPath,
+            string line,
+            CancellationToken token)
+        {
+            byte[] payload = System.Text.Encoding.UTF8.GetBytes(line);
+            await using FileStream journal = new FileStream(
+                journalPath,
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.Read,
+                16 * 1024,
+                FileOptions.Asynchronous | FileOptions.WriteThrough);
+            await journal.WriteAsync(payload, token);
+            await journal.FlushAsync(token);
+            journal.Flush(flushToDisk: true);
+        }
+
+        private static async Task WriteManifestAtomicallyAsync(
+            string manifestPath,
+            BackupManifest manifest,
+            CancellationToken token = default)
+        {
+            string temporaryPath = manifestPath + ".tmp";
+            await using (FileStream destination = new FileStream(
+                temporaryPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                128 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                await JsonSerializer.SerializeAsync(
+                    destination,
+                    manifest,
+                    new JsonSerializerOptions { WriteIndented = true },
+                    token);
+                await destination.FlushAsync(token);
+                destination.Flush(flushToDisk: true);
+            }
+            File.Move(temporaryPath, manifestPath, overwrite: true);
         }
 
         private static string SanitizeSessionName(string sessionName)
@@ -490,30 +685,124 @@ namespace AgentControl
             return value;
         }
 
-        private static string NormalizeRelativePath(string relativePath)
+        private static bool IsSameFirstPlan(CompletedFirstRun run, BackupSessionBegin request)
         {
-            string value = (relativePath ?? string.Empty)
-                .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
-                .TrimStart(Path.DirectorySeparatorChar);
+            return run.WorkingSessionName.Equals(request.SessionName, StringComparison.OrdinalIgnoreCase) &&
+                   run.StartedAtUtc == request.StartedAtUtc &&
+                   run.PlannedFileCount == request.PlannedFileCount &&
+                   run.PlannedTotalBytes == request.PlannedTotalBytes;
+        }
 
-            if (string.IsNullOrWhiteSpace(value) || Path.IsPathRooted(value))
+        private static void ValidateReceivedManifest(
+            ActiveBackupSession session,
+            BackupManifest manifest)
+        {
+            if (!manifest.AgentID.Equals(session.AgentID, StringComparison.OrdinalIgnoreCase) ||
+                !manifest.SessionName.Equals(session.SessionName, StringComparison.OrdinalIgnoreCase) ||
+                manifest.StartedAtUtc != session.StartedAtUtc ||
+                manifest.CompletedAtUtc < manifest.StartedAtUtc ||
+                manifest.Created == null || manifest.Modified == null ||
+                manifest.Deleted == null || manifest.Errors == null)
             {
-                throw new InvalidDataException("Đường dẫn tương đối của file backup không hợp lệ.");
+                throw new InvalidDataException("Metadata phiên hoặc danh sách manifest không hợp lệ.");
             }
 
-            return value;
+            var sourcePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var relativePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (BackupManifestEntry entry in manifest.Created.Concat(manifest.Modified))
+            {
+                string relativePath = NormalizeRelativePath(entry.RelativeStoragePath);
+                if (string.IsNullOrWhiteSpace(entry.SourcePath) || entry.Size < 0 ||
+                    entry.LastWriteTimeUtc == default || !IsSha256(entry.ContentSha256) ||
+                    !sourcePaths.Add(entry.SourcePath) || !relativePaths.Add(relativePath) ||
+                    !session.ReceivedFiles.TryGetValue(relativePath, out BackupManifestEntry? received) ||
+                    !received.SourcePath.Equals(entry.SourcePath, StringComparison.OrdinalIgnoreCase) ||
+                    received.Size != entry.Size ||
+                    received.LastWriteTimeUtc != entry.LastWriteTimeUtc ||
+                    !received.ContentSha256.Equals(entry.ContentSha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException(
+                        $"Manifest không khớp file Control đã nhận: {entry.SourcePath}");
+                }
+
+                string storedPath = GetSafeChildPath(
+                    Path.Combine(session.SessionRoot, "Files"),
+                    relativePath);
+                if (!File.Exists(storedPath) || new FileInfo(storedPath).Length != entry.Size)
+                {
+                    throw new InvalidDataException(
+                        $"File của manifest không tồn tại hoặc sai kích thước: {entry.SourcePath}");
+                }
+            }
+
+            foreach (BackupManifestEntry entry in manifest.Deleted)
+            {
+                if (string.IsNullOrWhiteSpace(entry.SourcePath) || !sourcePaths.Add(entry.SourcePath))
+                {
+                    throw new InvalidDataException("Danh sách file xóa trong manifest không hợp lệ.");
+                }
+                if (!string.IsNullOrWhiteSpace(entry.RelativeStoragePath))
+                {
+                    NormalizeRelativePath(entry.RelativeStoragePath);
+                }
+            }
+        }
+
+        private static void ValidateCompletedFirstArtifacts(
+            string sessionRoot,
+            string agentId,
+            string sessionName,
+            bool requireSidecar)
+        {
+            string manifestPath = Path.Combine(sessionRoot, "manifest.json");
+            if (!File.Exists(manifestPath))
+            {
+                throw new InvalidDataException(
+                    $"FIRST đang ở trạng thái chốt nhưng thiếu manifest.json: {sessionRoot}");
+            }
+
+            BackupSessionMetadataStore.ReadVerifiedSession(
+                sessionRoot,
+                manifestPath,
+                agentId,
+                sessionName,
+                "FIRST",
+                requireSidecar);
+        }
+
+        private static string CreateAvailableFirstSessionName(
+            string storageRoot,
+            string agentId,
+            DateTime completedDate)
+        {
+            string safeAgent = SanitizeSessionName(agentId);
+            string dateText = completedDate.ToString("yyyy-MM-dd");
+            string standardName = $"FIRST-{safeAgent}-{dateText}";
+            if (!Directory.Exists(GetSafeChildPath(storageRoot, standardName)))
+            {
+                return standardName;
+            }
+
+            for (int revision = 2; revision < 10_000; revision++)
+            {
+                string candidate = $"FIRST-{safeAgent}-R{revision}-{dateText}";
+                if (!Directory.Exists(GetSafeChildPath(storageRoot, candidate)))
+                {
+                    return candidate;
+                }
+            }
+
+            throw new IOException("Không thể tạo tên FIRST duy nhất cho ngày hoàn tất.");
+        }
+
+        private static string NormalizeRelativePath(string relativePath)
+        {
+            return PathSafety.NormalizeRelativePath(relativePath);
         }
 
         private static string GetSafeChildPath(string root, string child)
         {
-            string fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            string fullPath = Path.GetFullPath(Path.Combine(fullRoot, child));
-            if (!fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidDataException("Đường dẫn backup vượt ra ngoài thư mục lưu đã cấu hình.");
-            }
-
-            return fullPath;
+            return PathSafety.GetSafeChildPath(root, child);
         }
 
         private sealed class ActiveBackupSession : IDisposable
@@ -521,18 +810,22 @@ namespace AgentControl
             public string AgentID { get; }
             public string SessionName { get; }
             public string SessionRoot { get; }
+            public string BackupType { get; }
             public bool IsResumableFirst { get; }
             public DateTime StartedAtUtc { get; }
             public bool AlreadyCompleted { get; }
             public SemaphoreSlim WriteLock { get; } = new SemaphoreSlim(1, 1);
+            public Dictionary<string, BackupManifestEntry> ReceivedFiles { get; } =
+                new Dictionary<string, BackupManifestEntry>(StringComparer.OrdinalIgnoreCase);
 
             public ActiveBackupSession(
                 string agentId, string sessionName, string sessionRoot,
-                bool isResumableFirst, DateTime startedAtUtc, bool alreadyCompleted)
+                string backupType, bool isResumableFirst, DateTime startedAtUtc, bool alreadyCompleted)
             {
                 AgentID = agentId;
                 SessionName = sessionName;
                 SessionRoot = sessionRoot;
+                BackupType = backupType;
                 IsResumableFirst = isResumableFirst;
                 StartedAtUtc = startedAtUtc;
                 AlreadyCompleted = alreadyCompleted;

@@ -12,6 +12,16 @@ namespace AgentServices
     {
         public static void Main(string[] args)
         {
+            if (args.Length >= 2 &&
+                args[0].Equals("--open-path", StringComparison.OrdinalIgnoreCase))
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(args[1])
+                {
+                    UseShellExecute = true
+                });
+                return;
+            }
+
             try
             {
                 CreateHostBuilder(args).Build().Run();

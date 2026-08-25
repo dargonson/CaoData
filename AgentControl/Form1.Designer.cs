@@ -681,7 +681,6 @@
         private Button brndel;
         private Button btnCopy;
         private Button btnKetNoi;
-        private NHFUiControls.ListBoxNHF lvAgents;
         private NHFUiControls.ListBoxNHF ListboxAgents;
         private DataGridView dgvDownloads;
         private System.Windows.Forms.Timer tmrUpdateUI;
@@ -697,11 +696,6 @@
         private ColumnHeader ColDate;
         private Panel panel1;
         private Panel panel2;
-        private DataGridViewTextBoxColumn A;
-        private DataGridViewTextBoxColumn E;
-        private DataGridViewTextBoxColumn B;
-        private DataGridViewTextBoxColumn C;
-        private DataGridViewTextBoxColumn D;
         private TextBox txtxoa;
         private Label lblver;
         private Button btnupload;

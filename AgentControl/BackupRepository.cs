@@ -15,8 +15,8 @@ namespace AgentControl
     /// </summary>
     internal static class BackupRepository
     {
-        private const string ConnectionString = "Data Source=BackupManagement.db;Version=3;Default Timeout=30;BusyTimeout=5000;";
-        private static readonly SemaphoreSlim DbLock = new SemaphoreSlim(1, 1);
+        private static string ConnectionString => BackupDatabase.ConnectionString;
+        private static SemaphoreSlim DbLock => BackupDatabase.Gate;
         private static bool _initialized;
 
         public static async Task InitializeAsync()
@@ -30,6 +30,10 @@ namespace AgentControl
                 }
 
                 using SQLiteConnection connection = await OpenConnectionAsync();
+                using (SQLiteCommand pragma = new SQLiteCommand("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;", connection))
+                {
+                    await pragma.ExecuteNonQueryAsync();
+                }
                 using SQLiteCommand command = new SQLiteCommand(connection);
                 command.CommandText = @"
 CREATE TABLE IF NOT EXISTS BackupConfigs (
@@ -57,11 +61,17 @@ CREATE TABLE IF NOT EXISTS BackupFileInventory (
     RelativeStoragePath TEXT NOT NULL,
     Size INTEGER NOT NULL,
     LastWriteTimeUtc TEXT NOT NULL,
+    ContentSha256 TEXT NOT NULL DEFAULT '',
     IsDeleted INTEGER NOT NULL DEFAULT 0,
     UpdatedSession TEXT NOT NULL,
     PRIMARY KEY (AgentID, SourcePath)
 );";
                 await command.ExecuteNonQueryAsync();
+                await BackupDatabase.EnsureColumnAsync(
+                    connection,
+                    "BackupFileInventory",
+                    "ContentSha256",
+                    "TEXT NOT NULL DEFAULT ''");
                 _initialized = true;
             }
             finally
@@ -136,10 +146,18 @@ INSERT INTO BackupSessions
 VALUES
     (@AgentID, @SessionName, @BackupType, @StoragePath, @StartedAtUtc, @CompletedAtUtc, @Success, @Message)
 ON CONFLICT(AgentID, SessionName) DO UPDATE SET
-    StoragePath = excluded.StoragePath,
-    CompletedAtUtc = excluded.CompletedAtUtc,
-    Success = excluded.Success,
-    Message = excluded.Message;", connection, transaction);
+    StoragePath = CASE
+        WHEN BackupSessions.Success = 1 AND excluded.Success = 0 THEN BackupSessions.StoragePath
+        ELSE excluded.StoragePath END,
+    CompletedAtUtc = CASE
+        WHEN BackupSessions.Success = 1 AND excluded.Success = 0 THEN BackupSessions.CompletedAtUtc
+        ELSE excluded.CompletedAtUtc END,
+    Success = CASE
+        WHEN BackupSessions.Success = 1 THEN 1
+        ELSE excluded.Success END,
+    Message = CASE
+        WHEN BackupSessions.Success = 1 AND excluded.Success = 0 THEN BackupSessions.Message
+        ELSE excluded.Message END;", connection, transaction);
                 command.Parameters.AddWithValue("@AgentID", manifest.AgentID);
                 command.Parameters.AddWithValue("@SessionName", manifest.SessionName);
                 command.Parameters.AddWithValue("@BackupType", manifest.BackupType);
@@ -164,14 +182,15 @@ ON CONFLICT(AgentID, SessionName) DO UPDATE SET
 
                     using SQLiteCommand upsertCommand = new SQLiteCommand(@"
 INSERT INTO BackupFileInventory
-    (AgentID, SourcePath, FileName, RelativeStoragePath, Size, LastWriteTimeUtc, IsDeleted, UpdatedSession)
+    (AgentID, SourcePath, FileName, RelativeStoragePath, Size, LastWriteTimeUtc, ContentSha256, IsDeleted, UpdatedSession)
 VALUES
-    (@AgentID, @SourcePath, @FileName, @RelativeStoragePath, @Size, @LastWriteTimeUtc, 0, @UpdatedSession)
+    (@AgentID, @SourcePath, @FileName, @RelativeStoragePath, @Size, @LastWriteTimeUtc, @ContentSha256, 0, @UpdatedSession)
 ON CONFLICT(AgentID, SourcePath) DO UPDATE SET
     FileName = excluded.FileName,
     RelativeStoragePath = excluded.RelativeStoragePath,
     Size = excluded.Size,
     LastWriteTimeUtc = excluded.LastWriteTimeUtc,
+    ContentSha256 = excluded.ContentSha256,
     IsDeleted = 0,
     UpdatedSession = excluded.UpdatedSession;", connection, transaction);
 
@@ -180,6 +199,7 @@ ON CONFLICT(AgentID, SourcePath) DO UPDATE SET
                     SQLiteParameter relativePathParameter = upsertCommand.Parameters.Add("@RelativeStoragePath", System.Data.DbType.String);
                     SQLiteParameter sizeParameter = upsertCommand.Parameters.Add("@Size", System.Data.DbType.Int64);
                     SQLiteParameter lastWriteParameter = upsertCommand.Parameters.Add("@LastWriteTimeUtc", System.Data.DbType.String);
+                    SQLiteParameter hashParameter = upsertCommand.Parameters.Add("@ContentSha256", System.Data.DbType.String);
                     upsertCommand.Parameters.AddWithValue("@AgentID", manifest.AgentID);
                     upsertCommand.Parameters.AddWithValue("@UpdatedSession", manifest.SessionName);
 
@@ -190,6 +210,7 @@ ON CONFLICT(AgentID, SourcePath) DO UPDATE SET
                         relativePathParameter.Value = entry.RelativeStoragePath;
                         sizeParameter.Value = entry.Size;
                         lastWriteParameter.Value = entry.LastWriteTimeUtc.ToString("O");
+                        hashParameter.Value = entry.ContentSha256 ?? string.Empty;
                         await upsertCommand.ExecuteNonQueryAsync();
                     }
 
@@ -234,6 +255,7 @@ SELECT i.SourcePath,
        i.RelativeStoragePath,
        i.Size,
        i.LastWriteTimeUtc,
+       i.ContentSha256,
        s.StoragePath
 FROM BackupFileInventory i
 INNER JOIN BackupSessions s
@@ -260,7 +282,8 @@ LIMIT @BatchSize;", connection);
                             reader.GetString(3),
                             System.Globalization.CultureInfo.InvariantCulture,
                             System.Globalization.DateTimeStyles.RoundtripKind),
-                        SourceSessionRoot = reader.GetString(4)
+                        ContentSha256 = reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
+                        SourceSessionRoot = reader.GetString(5)
                     });
                 }
 
@@ -376,6 +399,7 @@ WHERE AgentID = @AgentID AND IsDeleted = 0;", connection, transaction))
         public string RelativeStoragePath { get; set; } = string.Empty;
         public long Size { get; set; }
         public DateTime LastWriteTimeUtc { get; set; }
+        public string ContentSha256 { get; set; } = string.Empty;
         public string SourceSessionRoot { get; set; } = string.Empty;
     }
 }

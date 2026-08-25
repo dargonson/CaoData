@@ -14,8 +14,8 @@ namespace AgentControl
     /// </summary>
     internal static class FirstBackupStore
     {
-        private const string ConnectionString = "Data Source=BackupManagement.db;Version=3;Default Timeout=30;BusyTimeout=5000;";
-        private static readonly SemaphoreSlim DbLock = new SemaphoreSlim(1, 1);
+        private static string ConnectionString => BackupDatabase.ConnectionString;
+        private static SemaphoreSlim DbLock => BackupDatabase.Gate;
         private static bool _initialized;
 
         public static async Task InitializeAsync()
@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS FirstBackupFiles (
     RelativeStoragePath TEXT NOT NULL,
     Size INTEGER NOT NULL,
     LastWriteTimeUtc TEXT NOT NULL,
+    ContentSha256 TEXT NOT NULL DEFAULT '',
     ReceivedBytes INTEGER NOT NULL DEFAULT 0,
     Status TEXT NOT NULL,
     UpdatedAtUtc TEXT NOT NULL,
@@ -63,18 +64,57 @@ CREATE TABLE IF NOT EXISTS FirstBackupSkipped (
     PRIMARY KEY (AgentID, SourcePath)
 );", connection);
                 await command.ExecuteNonQueryAsync();
+                await BackupDatabase.EnsureColumnAsync(
+                    connection,
+                    "FirstBackupFiles",
+                    "ContentSha256",
+                    "TEXT NOT NULL DEFAULT ''");
                 _initialized = true;
             }
             finally { DbLock.Release(); }
         }
 
-        public static async Task BeginRunAsync(BackupSessionBegin request, string workingPath)
+        public static async Task<bool> BeginRunAsync(BackupSessionBegin request, string workingPath)
         {
             await InitializeAsync();
             await DbLock.WaitAsync();
             try
             {
                 using SQLiteConnection connection = await OpenConnectionAsync();
+                using SQLiteTransaction transaction = connection.BeginTransaction();
+                bool sameInProgressRun = false;
+                using (SQLiteCommand existing = new SQLiteCommand(@"
+SELECT WorkingSessionName, StartedAtUtc, PlannedFileCount, PlannedTotalBytes, Status
+FROM FirstBackupRuns
+WHERE AgentID = @AgentID
+LIMIT 1;", connection, transaction))
+                {
+                    existing.Parameters.AddWithValue("@AgentID", request.AgentID);
+                    using SQLiteDataReader reader = existing.ExecuteReader();
+                    if (reader.Read())
+                    {
+                        sameInProgressRun =
+                            reader.GetString(0).Equals(request.SessionName, StringComparison.OrdinalIgnoreCase) &&
+                            DateTime.TryParse(reader.GetString(1), CultureInfo.InvariantCulture,
+                                DateTimeStyles.RoundtripKind, out DateTime oldStartedAtUtc) &&
+                            oldStartedAtUtc == request.StartedAtUtc &&
+                            reader.GetInt64(2) == request.PlannedFileCount &&
+                            reader.GetInt64(3) == request.PlannedTotalBytes &&
+                            reader.GetString(4).Equals("InProgress", StringComparison.OrdinalIgnoreCase);
+                    }
+                }
+
+                if (!sameInProgressRun)
+                {
+                    foreach (string table in new[] { "FirstBackupFiles", "FirstBackupSkipped" })
+                    {
+                        using SQLiteCommand clear = new SQLiteCommand(
+                            $"DELETE FROM {table} WHERE AgentID = @AgentID;", connection, transaction);
+                        clear.Parameters.AddWithValue("@AgentID", request.AgentID);
+                        await clear.ExecuteNonQueryAsync();
+                    }
+                }
+
                 using SQLiteCommand command = new SQLiteCommand(@"
 INSERT INTO FirstBackupRuns
     (AgentID, WorkingSessionName, WorkingPath, StartedAtUtc, PlannedFileCount, PlannedTotalBytes, Status, UpdatedAtUtc)
@@ -83,10 +123,13 @@ VALUES
 ON CONFLICT(AgentID) DO UPDATE SET
     WorkingSessionName = excluded.WorkingSessionName,
     WorkingPath = excluded.WorkingPath,
+    StartedAtUtc = excluded.StartedAtUtc,
     PlannedFileCount = excluded.PlannedFileCount,
     PlannedTotalBytes = excluded.PlannedTotalBytes,
     Status = 'InProgress',
-    UpdatedAtUtc = excluded.UpdatedAtUtc;", connection);
+    FinalSessionName = NULL,
+    FinalPath = NULL,
+    UpdatedAtUtc = excluded.UpdatedAtUtc;", connection, transaction);
                 command.Parameters.AddWithValue("@AgentID", request.AgentID);
                 command.Parameters.AddWithValue("@SessionName", request.SessionName);
                 command.Parameters.AddWithValue("@WorkingPath", workingPath);
@@ -95,6 +138,8 @@ ON CONFLICT(AgentID) DO UPDATE SET
                 command.Parameters.AddWithValue("@TotalBytes", request.PlannedTotalBytes);
                 command.Parameters.AddWithValue("@Now", DateTime.UtcNow.ToString("O"));
                 await command.ExecuteNonQueryAsync();
+                transaction.Commit();
+                return !sameInProgressRun;
             }
             finally { DbLock.Release(); }
         }
@@ -107,14 +152,23 @@ ON CONFLICT(AgentID) DO UPDATE SET
             {
                 using SQLiteConnection connection = await OpenConnectionAsync();
                 using SQLiteCommand command = new SQLiteCommand(@"
-SELECT FinalSessionName, FinalPath, Status
+SELECT FinalSessionName, FinalPath, Status, WorkingSessionName, WorkingPath,
+       StartedAtUtc, PlannedFileCount, PlannedTotalBytes
 FROM FirstBackupRuns
 WHERE AgentID = @AgentID AND Status IN ('Finalizing', 'Completed')
 LIMIT 1;", connection);
                 command.Parameters.AddWithValue("@AgentID", agentId);
                 using SQLiteDataReader reader = command.ExecuteReader();
                 return reader.Read()
-                    ? new CompletedFirstRun(reader.GetString(0), reader.GetString(1), reader.GetString(2))
+                    ? new CompletedFirstRun(
+                        reader.GetString(0),
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        reader.GetString(3),
+                        reader.GetString(4),
+                        DateTime.Parse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                        reader.GetInt64(6),
+                        reader.GetInt64(7))
                     : null;
             }
             finally { DbLock.Release(); }
@@ -132,9 +186,10 @@ LIMIT 1;", connection);
                 bool completed = false;
                 bool skipped = false;
                 long receivedBytes = 0;
+                string contentSha256 = string.Empty;
 
                 using (SQLiteCommand select = new SQLiteCommand(@"
-SELECT Size, LastWriteTimeUtc, ReceivedBytes, Status, RelativeStoragePath
+SELECT Size, LastWriteTimeUtc, ReceivedBytes, Status, RelativeStoragePath, ContentSha256
 FROM FirstBackupFiles
 WHERE AgentID = @AgentID AND SourcePath = @SourcePath
 LIMIT 1;", connection, transaction))
@@ -151,6 +206,7 @@ LIMIT 1;", connection, transaction))
                         completed = status.Equals("Completed", StringComparison.OrdinalIgnoreCase);
                         skipped = status.Equals("Skipped", StringComparison.OrdinalIgnoreCase);
                         string oldRelativePath = reader.GetString(4);
+                        contentSha256 = reader.IsDBNull(5) ? string.Empty : reader.GetString(5);
                         resetRequired = oldSize != query.TotalBytes ||
                                         !oldLastWrite.Equals(query.LastWriteTimeUtc.ToString("O"), StringComparison.Ordinal) ||
                                         !oldRelativePath.Equals(query.RelativeStoragePath, StringComparison.OrdinalIgnoreCase);
@@ -162,18 +218,20 @@ LIMIT 1;", connection, transaction))
                     receivedBytes = 0;
                     completed = false;
                     skipped = false;
+                    contentSha256 = string.Empty;
                 }
 
                 using (SQLiteCommand upsert = new SQLiteCommand(@"
 INSERT INTO FirstBackupFiles
-    (AgentID, SourcePath, FileName, RelativeStoragePath, Size, LastWriteTimeUtc, ReceivedBytes, Status, UpdatedAtUtc)
+    (AgentID, SourcePath, FileName, RelativeStoragePath, Size, LastWriteTimeUtc, ContentSha256, ReceivedBytes, Status, UpdatedAtUtc)
 VALUES
-    (@AgentID, @SourcePath, @FileName, @RelativePath, @Size, @LastWrite, @Received, @Status, @Now)
+    (@AgentID, @SourcePath, @FileName, @RelativePath, @Size, @LastWrite, @ContentSha256, @Received, @Status, @Now)
 ON CONFLICT(AgentID, SourcePath) DO UPDATE SET
     FileName = excluded.FileName,
     RelativeStoragePath = excluded.RelativeStoragePath,
     Size = excluded.Size,
     LastWriteTimeUtc = excluded.LastWriteTimeUtc,
+    ContentSha256 = CASE WHEN @Reset = 1 THEN '' ELSE FirstBackupFiles.ContentSha256 END,
     ReceivedBytes = CASE WHEN @Reset = 1 THEN 0 ELSE FirstBackupFiles.ReceivedBytes END,
     Status = CASE WHEN @Reset = 1 THEN 'InProgress' ELSE FirstBackupFiles.Status END,
     UpdatedAtUtc = excluded.UpdatedAtUtc;", connection, transaction))
@@ -184,6 +242,7 @@ ON CONFLICT(AgentID, SourcePath) DO UPDATE SET
                     upsert.Parameters.AddWithValue("@RelativePath", query.RelativeStoragePath);
                     upsert.Parameters.AddWithValue("@Size", query.TotalBytes);
                     upsert.Parameters.AddWithValue("@LastWrite", query.LastWriteTimeUtc.ToString("O"));
+                    upsert.Parameters.AddWithValue("@ContentSha256", contentSha256);
                     upsert.Parameters.AddWithValue("@Received", receivedBytes);
                     upsert.Parameters.AddWithValue("@Status", completed ? "Completed" : "InProgress");
                     upsert.Parameters.AddWithValue("@Reset", resetRequired ? 1 : 0);
@@ -192,7 +251,12 @@ ON CONFLICT(AgentID, SourcePath) DO UPDATE SET
                 }
 
                 transaction.Commit();
-                return new FirstFileRegistration(receivedBytes, completed, skipped, resetRequired);
+                return new FirstFileRegistration(
+                    receivedBytes,
+                    completed,
+                    skipped,
+                    resetRequired,
+                    contentSha256);
             }
             finally { DbLock.Release(); }
         }
@@ -208,15 +272,21 @@ WHERE AgentID = @AgentID AND SourcePath = @SourcePath;",
                 ("@ReceivedBytes", receivedBytes), ("@Now", DateTime.UtcNow.ToString("O")));
         }
 
-        public static async Task MarkCompletedAsync(string agentId, string sourcePath, long totalBytes)
+        public static async Task MarkCompletedAsync(
+            string agentId,
+            string sourcePath,
+            long totalBytes,
+            string contentSha256)
         {
             await InitializeAsync();
             await ExecuteAsync(@"
 UPDATE FirstBackupFiles
-SET ReceivedBytes = @TotalBytes, Status = 'Completed', UpdatedAtUtc = @Now
+SET ReceivedBytes = @TotalBytes, ContentSha256 = @ContentSha256,
+    Status = 'Completed', UpdatedAtUtc = @Now
 WHERE AgentID = @AgentID AND SourcePath = @SourcePath;",
                 ("@AgentID", agentId), ("@SourcePath", sourcePath),
-                ("@TotalBytes", totalBytes), ("@Now", DateTime.UtcNow.ToString("O")));
+                ("@TotalBytes", totalBytes), ("@ContentSha256", contentSha256),
+                ("@Now", DateTime.UtcNow.ToString("O")));
         }
 
         public static async Task MarkSkippedAsync(BackupFirstFileSkip skipped)
@@ -229,14 +299,15 @@ WHERE AgentID = @AgentID AND SourcePath = @SourcePath;",
                 using SQLiteTransaction transaction = connection.BeginTransaction();
                 using (SQLiteCommand file = new SQLiteCommand(@"
 INSERT INTO FirstBackupFiles
-    (AgentID, SourcePath, FileName, RelativeStoragePath, Size, LastWriteTimeUtc, ReceivedBytes, Status, UpdatedAtUtc)
+    (AgentID, SourcePath, FileName, RelativeStoragePath, Size, LastWriteTimeUtc, ContentSha256, ReceivedBytes, Status, UpdatedAtUtc)
 VALUES
-    (@AgentID, @SourcePath, @FileName, @RelativePath, @Size, @LastWrite, 0, 'Skipped', @Now)
+    (@AgentID, @SourcePath, @FileName, @RelativePath, @Size, @LastWrite, '', 0, 'Skipped', @Now)
 ON CONFLICT(AgentID, SourcePath) DO UPDATE SET
     FileName = excluded.FileName,
     RelativeStoragePath = excluded.RelativeStoragePath,
     Size = excluded.Size,
     LastWriteTimeUtc = excluded.LastWriteTimeUtc,
+    ContentSha256 = '',
     ReceivedBytes = 0,
     Status = 'Skipped',
     UpdatedAtUtc = excluded.UpdatedAtUtc;", connection, transaction))
@@ -268,26 +339,28 @@ ON CONFLICT(AgentID, SourcePath) DO UPDATE SET
             finally { DbLock.Release(); }
         }
 
-        public static async Task<(long Planned, long Completed)> GetRunCountsAsync(string agentId)
+        public static async Task<(bool Exists, long Planned, long Completed)> GetRunCountsAsync(string agentId)
         {
             await InitializeAsync();
             await DbLock.WaitAsync();
             try
             {
                 using SQLiteConnection connection = await OpenConnectionAsync();
+                bool exists;
                 long planned;
                 using (SQLiteCommand plannedCommand = new SQLiteCommand(
                     "SELECT PlannedFileCount FROM FirstBackupRuns WHERE AgentID = @AgentID LIMIT 1;", connection))
                 {
                     plannedCommand.Parameters.AddWithValue("@AgentID", agentId);
                     object? value = await plannedCommand.ExecuteScalarAsync();
-                    planned = value == null || value == DBNull.Value ? 0 : Convert.ToInt64(value);
+                    exists = value != null && value != DBNull.Value;
+                    planned = exists ? Convert.ToInt64(value, CultureInfo.InvariantCulture) : 0;
                 }
                 using SQLiteCommand completedCommand = new SQLiteCommand(
                     "SELECT COUNT(*) FROM FirstBackupFiles WHERE AgentID = @AgentID AND Status IN ('Completed', 'Skipped');", connection);
                 completedCommand.Parameters.AddWithValue("@AgentID", agentId);
                 long completed = Convert.ToInt64(await completedCommand.ExecuteScalarAsync());
-                return (planned, completed);
+                return (exists, planned, completed);
             }
             finally { DbLock.Release(); }
         }
@@ -300,7 +373,7 @@ ON CONFLICT(AgentID, SourcePath) DO UPDATE SET
             {
                 using SQLiteConnection connection = await OpenConnectionAsync();
                 using SQLiteCommand command = new SQLiteCommand(@"
-SELECT SourcePath, RelativeStoragePath, Size, LastWriteTimeUtc
+SELECT SourcePath, RelativeStoragePath, Size, LastWriteTimeUtc, ContentSha256
 FROM FirstBackupFiles
 WHERE AgentID = @AgentID AND Status = 'Completed'
   AND SourcePath > @After COLLATE NOCASE
@@ -318,7 +391,8 @@ LIMIT @Count;", connection);
                         SourcePath = reader.GetString(0),
                         RelativeStoragePath = reader.GetString(1),
                         Size = reader.GetInt64(2),
-                        LastWriteTimeUtc = DateTime.Parse(reader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+                        LastWriteTimeUtc = DateTime.Parse(reader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                        ContentSha256 = reader.IsDBNull(4) ? string.Empty : reader.GetString(4)
                     });
                 }
                 return result;
@@ -386,8 +460,8 @@ ON CONFLICT(AgentID, SessionName) DO UPDATE SET
 
                 using (SQLiteCommand inventory = new SQLiteCommand(@"
 INSERT INTO BackupFileInventory
-    (AgentID, SourcePath, FileName, RelativeStoragePath, Size, LastWriteTimeUtc, IsDeleted, UpdatedSession)
-SELECT AgentID, SourcePath, FileName, RelativeStoragePath, Size, LastWriteTimeUtc, 0, @SessionName
+    (AgentID, SourcePath, FileName, RelativeStoragePath, Size, LastWriteTimeUtc, ContentSha256, IsDeleted, UpdatedSession)
+SELECT AgentID, SourcePath, FileName, RelativeStoragePath, Size, LastWriteTimeUtc, ContentSha256, 0, @SessionName
 FROM FirstBackupFiles
 WHERE AgentID = @AgentID AND Status = 'Completed';", connection, transaction))
                 {
@@ -451,12 +525,19 @@ WHERE AgentID = @AgentID;",
         public bool Completed { get; }
         public bool Skipped { get; }
         public bool ResetRequired { get; }
-        public FirstFileRegistration(long receivedBytes, bool completed, bool skipped, bool resetRequired)
+        public string ContentSha256 { get; }
+        public FirstFileRegistration(
+            long receivedBytes,
+            bool completed,
+            bool skipped,
+            bool resetRequired,
+            string contentSha256)
         {
             ReceivedBytes = receivedBytes;
             Completed = completed;
             Skipped = skipped;
             ResetRequired = resetRequired;
+            ContentSha256 = contentSha256 ?? string.Empty;
         }
     }
 
@@ -476,11 +557,30 @@ WHERE AgentID = @AgentID;",
         public string SessionName { get; }
         public string StoragePath { get; }
         public string Status { get; }
-        public CompletedFirstRun(string sessionName, string storagePath, string status)
+        public string WorkingSessionName { get; }
+        public string WorkingPath { get; }
+        public DateTime StartedAtUtc { get; }
+        public long PlannedFileCount { get; }
+        public long PlannedTotalBytes { get; }
+
+        public CompletedFirstRun(
+            string sessionName,
+            string storagePath,
+            string status,
+            string workingSessionName,
+            string workingPath,
+            DateTime startedAtUtc,
+            long plannedFileCount,
+            long plannedTotalBytes)
         {
             SessionName = sessionName;
             StoragePath = storagePath;
             Status = status;
+            WorkingSessionName = workingSessionName;
+            WorkingPath = workingPath;
+            StartedAtUtc = startedAtUtc;
+            PlannedFileCount = plannedFileCount;
+            PlannedTotalBytes = plannedTotalBytes;
         }
     }
 }

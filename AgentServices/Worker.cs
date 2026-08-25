@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Security.Authentication;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -13,6 +14,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using AgentShared;
 using System.Collections.Concurrent;
+using System.Buffers;
 // Dùng chung định dạng gói tin với Server
 
 namespace AgentService
@@ -28,9 +30,10 @@ namespace AgentService
         private readonly AgentBackupManager _backupManager;
         private string _activeControlHost = "127.0.0.1";
         private int _activeControlPort = 9000;
+        private readonly string _sharedKey;
 
         private TcpClient? _client;
-        private NetworkStream? _stream;
+        private Stream? _stream;
         private bool _isConnected = false;
         private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim _downloadLock = new SemaphoreSlim(3, 3);
@@ -45,6 +48,14 @@ namespace AgentService
         {
             _logger = logger;
             _configuration = configuration;
+            _sharedKey = (Environment.GetEnvironmentVariable("CAODATA_SHARED_KEY")
+                ?? configuration["ConnectionConfig:SharedKey"]
+                ?? string.Empty).Trim();
+            if (_sharedKey.Length < 32)
+            {
+                throw new InvalidOperationException(
+                    "ConnectionConfig:SharedKey chưa được cấu hình hoặc ngắn hơn 32 ký tự.");
+            }
             _updateClient = new AgentUpdateClient(SendPacketAsync, () => (_activeControlHost, _activeControlPort), logger);
             string agentId = HardwareInfo.GetUniqueAgentID();
             _backupManager = new AgentBackupManager(
@@ -296,10 +307,18 @@ namespace AgentService
             {
                 lanIP = (_configuration["ConnectionConfig:ServerLAN"] ?? "127.0.0.1").Trim();
                 wanIP = (_configuration["ConnectionConfig:ServerWAN"] ?? "127.0.0.1").Trim();
-                int.TryParse(_configuration["ConnectionConfig:Port"], out port);
-                if (port == 0) port = 9000;
-                int.TryParse(_configuration["ConnectionConfig:ConnectionTimeoutMs"], out connectionTimeoutMs);
-                if (connectionTimeoutMs < 1000) connectionTimeoutMs = 8000;
+                if (!int.TryParse(_configuration["ConnectionConfig:Port"], out port) ||
+                    port is < 1 or > 65535)
+                {
+                    port = 9000;
+                }
+                if (!int.TryParse(
+                        _configuration["ConnectionConfig:ConnectionTimeoutMs"],
+                        out connectionTimeoutMs) ||
+                    connectionTimeoutMs is < 1000 or > 120000)
+                {
+                    connectionTimeoutMs = 8000;
+                }
             }
 
             string agentID = HardwareInfo.GetUniqueAgentID();
@@ -308,61 +327,68 @@ namespace AgentService
             _logger?.LogInformation("Agent Service bắt đầu khởi chạy với ID: {AgentID}", agentID);
 
             // BO SUNG MODULE BACKUP: scheduler doc appsettings va chi chay khi den lich.
-            _ = _backupManager.RunSchedulerAsync(stoppingToken);
+            Task backupSchedulerTask = RunBackgroundOperationAsync(
+                () => _backupManager.RunSchedulerAsync(stoppingToken),
+                "lịch backup",
+                stoppingToken);
 
-            // Vòng lặp duy trì kết nối vĩnh viễn...
+            // Mỗi lần kết nối chỉ có đúng một listener và một heartbeat.
             while (!stoppingToken.IsCancellationRequested)
             {
-                while (!stoppingToken.IsCancellationRequested)
+                _logger?.LogInformation("Đang thử kết nối tới Server...");
+
+                _isConnected = await TryConnectAsync(lanIP, port, connectionTimeoutMs, "LAN", stoppingToken);
+                if (!_isConnected && !stoppingToken.IsCancellationRequested)
                 {
-                    if (!_isConnected)
+                    _logger?.LogWarning("Kết nối LAN thất bại. Đang chuyển sang thử WAN...");
+                    _isConnected = await TryConnectAsync(wanIP, port, connectionTimeoutMs, "WAN", stoppingToken);
+                }
+
+                if (!_isConnected)
+                {
+                    int delaySeconds = _reconnectDelays[_reconnectIndex];
+                    _logger?.LogError("Không thể kết nối tới Server. Thử lại sau {delay} giây...", delaySeconds);
+                    if (_reconnectIndex < _reconnectDelays.Length - 1)
                     {
-                        _logger?.LogInformation("Đang thử kết nối tới Server...");
-
-                        // 1. Ưu tiên kết nối mạng LAN trước
-                        _isConnected = await TryConnectAsync(lanIP, port, connectionTimeoutMs, "LAN", stoppingToken);
-
-                        // 2. Nếu LAN thất bại, tự động chuyển sang WAN
-                        if (!_isConnected)
-                        {
-                            _logger?.LogWarning("Kết nối LAN thất bại. Đang chuyển sang thử WAN...");
-                            _isConnected = await TryConnectAsync(wanIP, port, connectionTimeoutMs, "WAN", stoppingToken);
-                        }
-
-                        if (_isConnected)
-                        {
-                            _logger?.LogInformation("KẾT NỐI SERVER THÀNH CÔNG!");
-                            _reconnectIndex = 0; // Reset lại chu kỳ chờ reconnect về mức 5s
-
-                            // Đăng ký thông tin máy với Server ngay khi vừa kết nối
-                            await SendRegisterInfoAsync();
-                            await _updateClient.SendPendingCompletionStatusAsync(agentID, stoppingToken);
-
-                            // Kích hoạt luồng gửi Tim Mạch (Heartbeat) song song định kỳ 30 giây
-                            _ = StartHeartbeatLoopAsync(agentID, stoppingToken);
-
-                            // Kích hoạt luồng đứng lắng nghe lệnh từ Server đổ về (Sẽ dùng cho Copy/Duyệt file sau)
-                            _ = ListenToServerAsync(stoppingToken);
-                        }
-                        else
-                        {
-                            // Xử lý Reconnect lũy tiến nếu cả LAN và WAN đều sập
-                            int delaySeconds = _reconnectDelays[_reconnectIndex];
-                            _logger?.LogError("Không thể kết nối tới Server. Thử lại sau {delay} giây...", delaySeconds);
-
-                            if (_reconnectIndex < _reconnectDelays.Length - 1)
-                                _reconnectIndex++; // Tăng tiến dần từ 5s -> 10s -> 20s -> 30s
-
-                            await Task.Delay(delaySeconds * 1000, stoppingToken);
-                        }
+                        _reconnectIndex++;
                     }
-                    else
+                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds), stoppingToken);
+                    continue;
+                }
+
+                _logger?.LogInformation("KẾT NỐI SERVER THÀNH CÔNG!");
+                _reconnectIndex = 0;
+                using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                Task? heartbeatTask = null;
+                try
+                {
+                    await SendRegisterInfoAsync(connectionCts.Token);
+                    await _updateClient.SendPendingCompletionStatusAsync(agentID, connectionCts.Token);
+                    heartbeatTask = StartHeartbeatLoopAsync(agentID, connectionCts.Token);
+                    await ListenToServerAsync(connectionCts.Token);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning("Kết nối tới Server kết thúc: {Message}", ex.Message);
+                }
+                finally
+                {
+                    _isConnected = false;
+                    connectionCts.Cancel();
+                    CloseCurrentConnection();
+                    if (heartbeatTask != null)
                     {
-                        // Nếu vẫn đang online ổn định thì nghỉ ngơi 1 giây rồi check tiếp
-                        await Task.Delay(1000, stoppingToken);
+                        try { await heartbeatTask; }
+                        catch (OperationCanceledException) { }
                     }
                 }
             }
+
+            await backupSchedulerTask;
         }
 
         // Hàm thử kết nối Socket
@@ -387,9 +413,15 @@ namespace AgentService
                 await client.ConnectAsync(ip, port, timeoutCts.Token);
                 if (client.Connected)
                 {
-                    _client?.Close();
+                    Stream secureStream = await SecureTransport.AuthenticateClientAsync(
+                        client.GetStream(),
+                        ip,
+                        HardwareInfo.GetUniqueAgentID(),
+                        _sharedKey,
+                        timeoutCts.Token);
+                    CloseCurrentConnection();
                     _client = client;
-                    _stream = _client.GetStream();
+                    _stream = secureStream;
                     _activeControlHost = ip;
                     _activeControlPort = port;
                     _logger?.LogInformation("Kết nối {Profile} thành công: {Ip}:{Port}", profileName, ip, port);
@@ -418,12 +450,18 @@ namespace AgentService
         // Hàm gửi gói tin chuẩn mã hóa kích thước 4 bytes đầu chống dính gói
         private async Task SendPacketAsync(SocketPacket packet)
         {
-            if (!_isConnected || _stream == null) return;
+            if (!_isConnected || _stream == null)
+            {
+                throw new IOException("Chưa kết nối tới AgentControl.");
+            }
 
             await _sendLock.WaitAsync();
             try
             {
-                if (!_isConnected || _stream == null) return;
+                if (!_isConnected || _stream == null)
+                {
+                    throw new IOException("Kết nối tới AgentControl đã đóng.");
+                }
 
                 await TransferFrameProtocol.WriteJsonPacketAsync(_stream, packet);
 
@@ -431,11 +469,67 @@ namespace AgentService
             }
             catch
             {
-                _isConnected = false; // Gửi lỗi lập tức coi như mất mạng để kích hoạt luồng Reconnect
+                CloseCurrentConnection();
+                throw;
             }
             finally
             {
                 _sendLock.Release();
+            }
+        }
+
+        private async Task SendRequiredPacketAsync(SocketPacket packet, CancellationToken token)
+        {
+            if (!_isConnected || _stream == null)
+            {
+                throw new IOException("Chưa kết nối tới AgentControl.");
+            }
+
+            await _sendLock.WaitAsync(token);
+            try
+            {
+                if (!_isConnected || _stream == null)
+                {
+                    throw new IOException("Kết nối tới AgentControl đã đóng.");
+                }
+
+                await TransferFrameProtocol.WriteJsonPacketAsync(_stream, packet, token);
+            }
+            catch
+            {
+                CloseCurrentConnection();
+                throw;
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
+        }
+
+        private void CloseCurrentConnection()
+        {
+            _isConnected = false;
+            Stream? stream = Interlocked.Exchange(ref _stream, null);
+            TcpClient? client = Interlocked.Exchange(ref _client, null);
+            try { stream?.Dispose(); } catch { }
+            try { client?.Dispose(); } catch { }
+        }
+
+        private async Task RunBackgroundOperationAsync(
+            Func<Task> operation,
+            string operationName,
+            CancellationToken token)
+        {
+            try
+            {
+                await operation();
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Tác vụ nền {OperationName} kết thúc lỗi.", operationName);
             }
         }
 
@@ -459,7 +553,7 @@ namespace AgentService
             }
             catch
             {
-                _isConnected = false;
+                CloseCurrentConnection();
                 throw;
             }
             finally
@@ -492,7 +586,7 @@ namespace AgentService
             }
             catch
             {
-                _isConnected = false;
+                CloseCurrentConnection();
                 throw;
             }
             finally
@@ -503,18 +597,25 @@ namespace AgentService
 
         private async Task SendDownloadChunkAsync(FileChunkPacket chunk, byte[] buffer, int count, CancellationToken token)
         {
-            if (!_isConnected || _stream == null) return;
+            if (!_isConnected || _stream == null)
+            {
+                throw new IOException("Chưa kết nối tới AgentControl.");
+            }
 
             await _sendLock.WaitAsync(token);
             try
             {
-                if (!_isConnected || _stream == null) return;
+                if (!_isConnected || _stream == null)
+                {
+                    throw new IOException("Kết nối tới AgentControl đã đóng.");
+                }
 
+                chunk.AgentID = HardwareInfo.GetUniqueAgentID();
                 await TransferFrameProtocol.WriteBinaryDownloadChunkAsync(_stream, chunk, buffer, count, token);
             }
             catch
             {
-                _isConnected = false;
+                CloseCurrentConnection();
                 throw;
             }
             finally
@@ -523,7 +624,14 @@ namespace AgentService
             }
         }
 
-        private async Task SendDownloadErrorAsync(string agentId, string downloadId, string remotePath, string message, long downloadedBytes = 0, long totalBytes = 0)
+        private async Task SendDownloadErrorAsync(
+            string agentId,
+            string downloadId,
+            string remotePath,
+            string message,
+            long downloadedBytes = 0,
+            long totalBytes = 0,
+            bool resetRequired = false)
         {
             var errorPacket = new DownloadErrorPacket
             {
@@ -531,7 +639,8 @@ namespace AgentService
                 RemotePath = remotePath,
                 ErrorMessage = message,
                 DownloadedBytes = downloadedBytes,
-                TotalBytes = totalBytes
+                TotalBytes = totalBytes,
+                ResetRequired = resetRequired
             };
 
             await SendPacketAsync(new SocketPacket
@@ -572,7 +681,7 @@ namespace AgentService
             });
         }
 
-        private async Task HandleBinaryUploadChunkAsync(NetworkStream stream, int frameSize, CancellationToken token)
+        private async Task HandleBinaryUploadChunkAsync(Stream stream, int frameSize, CancellationToken token)
         {
             FileChunkPacket? chunk = null;
             int bodySize = 0;
@@ -586,9 +695,7 @@ namespace AgentService
                 chunk = binaryFrame.Header;
                 bodySize = binaryFrame.BodySize;
 
-                string agentId = string.IsNullOrWhiteSpace(chunk.AgentID)
-                    ? HardwareInfo.GetUniqueAgentID()
-                    : chunk.AgentID;
+                string agentId = HardwareInfo.GetUniqueAgentID();
                 string uploadId = chunk.DownloadID;
                 string targetPath = chunk.RemotePath;
                 string checksumAlgorithm = NormalizeChecksumAlgorithm(chunk.ChecksumAlgorithm);
@@ -599,6 +706,16 @@ namespace AgentService
                     return;
                 }
 
+                if (!string.Equals(chunk.AgentID, agentId, StringComparison.OrdinalIgnoreCase) ||
+                    chunk.TotalBytes < 0 || chunk.Offset < 0 ||
+                    chunk.Offset > chunk.TotalBytes || bodySize != chunk.ChunkSize ||
+                    bodySize > chunk.TotalBytes - chunk.Offset ||
+                    (chunk.IsLastChunk && chunk.Offset + bodySize != chunk.TotalBytes) ||
+                    (!chunk.IsLastChunk && chunk.Offset + bodySize >= chunk.TotalBytes))
+                {
+                    throw new InvalidDataException("Metadata upload chunk không hợp lệ.");
+                }
+
                 _uploadSleepBlocks.GetOrAdd(
                     uploadId,
                     _ => SystemSleepBlocker.PreventSystemSleep(
@@ -606,34 +723,17 @@ namespace AgentService
 
                 transferFinished = chunk.IsLastChunk;
 
-                string? targetFolder = Path.GetDirectoryName(targetPath);
-                if (!string.IsNullOrWhiteSpace(targetFolder))
-                {
-                    Directory.CreateDirectory(targetFolder);
-                }
-
                 string tempPath = targetPath + ".uploading";
-                await using (FileStream fs = new FileStream(tempPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, 128 * 1024, FileOptions.Asynchronous))
-                {
-                    if (chunk.Offset <= 0)
-                    {
-                        fs.SetLength(0);
-                    }
-
-                    fs.Seek(chunk.Offset, SeekOrigin.Begin);
-                    bodyCopyStarted = true;
-                    await TransferFrameProtocol.CopyExactToAsync(stream, fs, bodySize, token);
-                    bodyCopyCompleted = true;
-
-                    if (chunk.IsLastChunk && chunk.TotalBytes >= 0)
-                    {
-                        fs.SetLength(chunk.TotalBytes);
-                    }
-
-                    await fs.FlushAsync(token);
-                }
-
-                long currentUploaded = chunk.Offset + bodySize;
+                bodyCopyStarted = true;
+                long currentUploaded = await ResumableTransferFile.WriteChunkAsync(
+                    stream,
+                    tempPath,
+                    chunk.Offset,
+                    chunk.TotalBytes,
+                    bodySize,
+                    chunk.IsLastChunk,
+                    token);
+                bodyCopyCompleted = true;
                 if (!chunk.IsLastChunk)
                 {
                     await SendUploadStatusAsync(agentId, uploadId, targetPath, currentUploaded, chunk.TotalBytes, "Uploading", checksumAlgorithm);
@@ -679,9 +779,7 @@ namespace AgentService
                         }
                     }
 
-                    string agentId = string.IsNullOrWhiteSpace(chunk.AgentID)
-                        ? HardwareInfo.GetUniqueAgentID()
-                        : chunk.AgentID;
+                    string agentId = HardwareInfo.GetUniqueAgentID();
                     long uploadedBytes = Math.Max(0, chunk.Offset);
                     try
                     {
@@ -709,6 +807,7 @@ namespace AgentService
                     sleepBlock.Dispose();
                 }
             }
+
         }
 
         private void ReleaseUploadSleepBlocks()
@@ -761,16 +860,27 @@ namespace AgentService
             }
 
             const int checksumBufferSize = 1024 * 1024;
-            await using FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, checksumBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            await using FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, checksumBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            return await ComputeStreamChecksumAsync(fs, algorithm, token);
+        }
+
+        private static async Task<string> ComputeStreamChecksumAsync(Stream stream, string algorithm, CancellationToken token)
+        {
             using HashAlgorithm hash = CreateHashAlgorithm(algorithm);
-            byte[] result = await hash.ComputeHashAsync(fs, token);
+            byte[] result = await hash.ComputeHashAsync(stream, token);
             return Convert.ToHexString(result);
         }
 
-        private async Task SendRemoteFolderFilesAsync(string agentId, string requestData)
+        private async Task SendRemoteFolderFilesAsync(
+            string agentId,
+            string requestData,
+            CancellationToken token)
         {
             RemoteFolderFilesRequest? request = null;
-            var response = new RemoteFolderFilesResponse();
+            var errors = new List<string>();
+            var response = new RemoteFolderFilesResponse { IsFinalPage = false };
+            int pageNumber = 0;
+            int sentErrorCount = 0;
 
             try
             {
@@ -782,15 +892,15 @@ namespace AgentService
 
                 response.RequestID = request.RequestID;
                 response.RemoteRootPath = request.RemoteRootPath;
-
                 if (!Directory.Exists(request.RemoteRootPath))
                 {
-                    response.Errors.Add("Folder khong ton tai hoac khong truy cap duoc.");
+                    errors.Add("Folder khong ton tai hoac khong truy cap duoc.");
                 }
                 else
                 {
-                    foreach (string filePath in EnumerateFilesSafe(request.RemoteRootPath, response.Errors))
+                    foreach (string filePath in EnumerateFilesSafe(request.RemoteRootPath, errors))
                     {
+                        token.ThrowIfCancellationRequested();
                         try
                         {
                             var fileInfo = new FileInfo(filePath);
@@ -803,24 +913,49 @@ namespace AgentService
                         }
                         catch (Exception ex)
                         {
-                            response.Errors.Add($"{filePath}: {ex.Message}");
+                            errors.Add($"{filePath}: {ex.Message}");
+                        }
+
+                        if (response.Files.Count >= 1000)
+                        {
+                            response.PageNumber = pageNumber++;
+                            response.Errors.AddRange(errors.Skip(sentErrorCount));
+                            sentErrorCount = errors.Count;
+                            await SendRemoteFolderFilesPageAsync(agentId, response, token);
+                            response = new RemoteFolderFilesResponse
+                            {
+                                RequestID = request.RequestID,
+                                RemoteRootPath = request.RemoteRootPath,
+                                IsFinalPage = false
+                            };
                         }
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 response.RequestID = request?.RequestID ?? string.Empty;
                 response.RemoteRootPath = request?.RemoteRootPath ?? string.Empty;
-                response.Errors.Add(ex.Message);
+                errors.Add(ex.Message);
             }
 
-            await SendPacketAsync(new SocketPacket
+            response.PageNumber = pageNumber;
+            response.IsFinalPage = true;
+            response.Errors.AddRange(errors.Skip(sentErrorCount));
+            await SendRemoteFolderFilesPageAsync(agentId, response, token);
+        }
+
+        private Task SendRemoteFolderFilesPageAsync(
+            string agentId,
+            RemoteFolderFilesResponse response,
+            CancellationToken token)
+        {
+            return SendRequiredPacketAsync(new SocketPacket
             {
                 Type = "GET_FOLDER_FILES_RESPONSE",
                 AgentID = agentId,
                 Data = JsonSerializer.Serialize(response)
-            });
+            }, token);
         }
 
         private async Task SendRemoteFileActionResponseAsync(string agentId, RemoteFileActionResponse response)
@@ -925,10 +1060,7 @@ namespace AgentService
                 }
                 else
                 {
-                    Process.Start(new ProcessStartInfo(path)
-                    {
-                        UseShellExecute = true
-                    });
+                    InteractiveSessionLauncher.OpenPath(path);
 
                     response.Paths.Add(path);
                 }
@@ -978,42 +1110,59 @@ namespace AgentService
 
         private IEnumerable<string> EnumerateFilesSafe(string rootPath, List<string> errors)
         {
-            IEnumerable<string> files = Array.Empty<string>();
-            IEnumerable<string> directories = Array.Empty<string>();
-
-            try
+            Stack<string> pending = new Stack<string>();
+            pending.Push(rootPath);
+            while (pending.Count > 0)
             {
-                files = Directory.EnumerateFiles(rootPath);
-            }
-            catch (Exception ex)
-            {
-                errors.Add($"{rootPath}: {ex.Message}");
-            }
-
-            foreach (string file in files)
-            {
-                yield return file;
-            }
-
-            try
-            {
-                directories = Directory.EnumerateDirectories(rootPath);
-            }
-            catch (Exception ex)
-            {
-                errors.Add($"{rootPath}: {ex.Message}");
-            }
-
-            foreach (string directory in directories)
-            {
-                foreach (string file in EnumerateFilesSafe(directory, errors))
+                string current = pending.Pop();
+                string[] files;
+                string[] directories;
+                try
                 {
-                    yield return file;
+                    files = Directory.GetFiles(current);
+                    directories = Directory.GetDirectories(current);
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"{current}: {ex.Message}");
+                    continue;
+                }
+
+                foreach (string file in files)
+                {
+                    bool include = false;
+                    try
+                    {
+                        include = (File.GetAttributes(file) & FileAttributes.ReparsePoint) == 0;
+                    }
+                    catch (Exception ex)
+                    {
+                        errors.Add($"{file}: {ex.Message}");
+                    }
+                    if (include)
+                    {
+                        yield return file;
+                    }
+                }
+
+                foreach (string directory in directories)
+                {
+                    try
+                    {
+                        if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0)
+                        {
+                            pending.Push(directory);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        errors.Add($"{directory}: {ex.Message}");
+                    }
                 }
             }
         }
 
-        private async Task SendRegisterInfoAsync()
+        private async Task SendRegisterInfoAsync(CancellationToken token)
         {
             try
             {
@@ -1031,12 +1180,13 @@ namespace AgentService
                     Data = jsonPayload        // Điền chuỗi JSON thông tin chi tiết vào thuộc tính Data kiểu string
                 };
 
-                await SendPacketAsync(registerPacket);
+                await SendRequiredPacketAsync(registerPacket, token);
                 _logger?.LogInformation("Đã gửi gói REGISTER đăng ký thông tin máy lên Server thành công.");
             }
             catch (Exception ex)
             {
                 _logger?.LogError("Lỗi khi gửi gói REGISTER: {Message}", ex.Message);
+                throw;
             }
         }
 
@@ -1060,167 +1210,11 @@ namespace AgentService
             }
         }
 
-        // Luồng lắng nghe lệnh tối ưu, sẵn sàng phục vụ các tính năng duyệt file/copy ở lượt chat tới
-        /*private async Task ListenToServerAsync(CancellationToken token)
-        {
-            byte[] sizeBuffer = new byte[4];
-            try
-            {
-                while (_isConnected && !token.IsCancellationRequested && _stream != null)
-                {
-                    int bytesRead = await TransferFrameProtocol.ReadExactOrEndAsync(_stream, sizeBuffer, 0, 4, token);
-                    if (bytesRead == 0) break; // Server chủ động ngắt kết nối
-
-                    int packetSize = BitConverter.ToInt32(sizeBuffer, 0);
-                    if (packetSize <= 0)
-                    {
-                        throw new InvalidDataException("Invalid packet size.");
-                    }
-
-                    byte[] firstByteBuffer = new byte[1];
-                    await TransferFrameProtocol.ReadExactAsync(_stream, firstByteBuffer, 0, 1, token);
-
-                    if (firstByteBuffer[0] == TransferFrameProtocol.BinaryUploadChunkMarker)
-                    {
-                        await HandleBinaryUploadChunkAsync(_stream, packetSize, token);
-                        continue;
-                    }
-
-                    byte[] dataBuffer = new byte[packetSize];
-                    dataBuffer[0] = firstByteBuffer[0];
-
-                    int totalBytesReceived = 1;
-                    while (totalBytesReceived < packetSize)
-                    {
-                        int read = await _stream.ReadAsync(dataBuffer, totalBytesReceived, packetSize - totalBytesReceived, token);
-                        if (read == 0) break;
-                        totalBytesReceived += read;
-                    }
-
-                    string jsonStr = Encoding.UTF8.GetString(dataBuffer);
-                    var packet = JsonSerializer.Deserialize<SocketPacket>(jsonStr);
-
-                    if (packet != null)
-                    {
-                        _logger?.LogInformation("Nhận lệnh từ Server: {Type}", packet.Type);
-                        if (packet.Type == "BROWSE_DRIVES")
-                        {
-                            _logger?.LogInformation("Server yêu cầu lấy danh sách ổ đĩa.");
-
-                            // 1. Cào danh sách các ổ đĩa thực tế đang sẵn sàng trên hệ điều hành
-                            var driveList = new System.Collections.Generic.List<string>();
-                            foreach (var drive in System.IO.DriveInfo.GetDrives())
-                            {
-                                if (drive.IsReady)
-                                {
-                                    driveList.Add(drive.Name); // Kết quả trả về dạng: "C:\", "D:\"
-                                }
-                            }
-
-                            // 2. Chuyển danh sách thành chuỗi JSON gán vào thuộc tính Data
-                            SocketPacket responsePacket = new SocketPacket
-                            {
-                                Type = "BROWSE_DRIVES_RESPONSE",
-                                AgentID = packet.AgentID,
-                                Data = System.Text.Json.JsonSerializer.Serialize(driveList)
-                            };
-
-                            // 3. Đóng gói chuỗi hóa toàn bộ gói tin để bắn ngược về Server
-                            string jsonString = System.Text.Json.JsonSerializer.Serialize(responsePacket);
-                            byte[] driveDataBuffer = System.Text.Encoding.UTF8.GetBytes(jsonString); // Đổi tên ở đây
-                            byte[] driveLengthPrefix = BitConverter.GetBytes(driveDataBuffer.Length); // Đổi tên ở đây
-
-                            if (_stream != null && _stream.CanWrite)
-                            {
-                                await _stream.WriteAsync(driveLengthPrefix, 0, driveLengthPrefix.Length);
-                                await _stream.WriteAsync(driveDataBuffer, 0, driveDataBuffer.Length);
-                                await _stream.FlushAsync();
-                            }
-                        }
-
-                        if (packet.Type == "GET_DRIVES")
-                        {
-                            var drives = new System.Collections.Generic.List<string>();
-                            foreach (var drive in System.IO.DriveInfo.GetDrives())
-                            {
-                                if (drive.IsReady) drives.Add(drive.Name); // Trả về dạng "C:\", "D:\"
-                            }
-
-                            SocketPacket response = new SocketPacket
-                            {
-                                Type = "GET_DRIVES_RESPONSE",
-                                AgentID = packet.AgentID,
-                                Data = System.Text.Json.JsonSerializer.Serialize(drives)
-                            };
-                            await SendPacketAsync(response); // Gọi hàm gửi mảng byte có lengthPrefix của fen
-                        }
-
-                        // 2. NHÁNH XỬ LÝ LAZY LOADING CÀO THƯ MỤC CON THEO ĐƯỜNG DẪN YÊU CẦU
-                        else if (packet.Type == "GET_DIRECTORY")
-                        {
-                            string targetPath = packet.Data; // Đường dẫn Server muốn cào (Ví dụ: C:\Users)
-                            var dirContent = new RemoteDirectoryContent
-                            {
-                                CurrentPath = targetPath
-                            };
-
-                            try
-                            {
-                                if (System.IO.Directory.Exists(targetPath))
-                                {
-                                    // Lấy danh sách thư mục con
-                                    foreach (var dir in System.IO.Directory.GetDirectories(targetPath))
-                                    {
-                                        var info = new System.IO.DirectoryInfo(dir);
-                                        if ((info.Attributes & System.IO.FileAttributes.Hidden) == 0) // Bỏ qua file ẩn
-                                        {
-                                            dirContent.SubFolders.Add(info.FullName);
-                                        }
-                                    }
-                                    // Lấy danh sách tập tin con
-                                    foreach (var file in System.IO.Directory.GetFiles(targetPath))
-                                    {
-                                        var info = new System.IO.FileInfo(file);
-                                        if ((info.Attributes & System.IO.FileAttributes.Hidden) == 0)
-                                        {
-                                            dirContent.Files.Add(info.FullName);
-                                        }
-                                    }
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                dirContent.ErrorMessage = ex.Message; // Trả về lỗi nếu thư mục bị chặn quyền (Access Denied)
-                            }
-
-                            SocketPacket response = new SocketPacket
-                            {
-                                Type = "GET_DIRECTORY_RESPONSE",
-                                AgentID = packet.AgentID,
-                                Data = System.Text.Json.JsonSerializer.Serialize(dirContent)
-                            };
-                            await SendPacketAsync(response);
-                        }
-
-
-                        // Kế hoạch xử lý các lệnh: BROWSE_DRIVES, COPY_FILE... sẽ nằm ở đây
-                    }
-                }
-            }
-            catch
-            {
-                // Gặp lỗi ngắt kết nối
-            }
-            finally
-            {
-                _isConnected = false;
-                _logger?.LogWarning("Mất kết nối tới Server. Đã kích hoạt trạng thái chờ Reconnect...");
-            }
-        }*/
-
         private async Task ListenToServerAsync(CancellationToken token)
         {
             byte[] sizeBuffer = new byte[4];
+            byte[] firstByteBuffer = new byte[1];
+            string expectedAgentId = HardwareInfo.GetUniqueAgentID();
             try
             {
                 while (_isConnected && !token.IsCancellationRequested && _stream != null)
@@ -1231,12 +1225,8 @@ namespace AgentService
                     if (bytesRead != 4) throw new EndOfStreamException("Socket closed before packet size was fully received.");
 
                     int packetSize = BitConverter.ToInt32(sizeBuffer, 0);
-                    if (packetSize <= 0)
-                    {
-                        throw new InvalidDataException("Invalid packet size.");
-                    }
+                    TransferFrameProtocol.ValidateFrameSize(packetSize);
 
-                    byte[] firstByteBuffer = new byte[1];
                     await TransferFrameProtocol.ReadExactAsync(_stream, firstByteBuffer, 0, 1, token);
 
                     if (firstByteBuffer[0] == TransferFrameProtocol.BinaryUploadChunkMarker)
@@ -1245,22 +1235,33 @@ namespace AgentService
                         continue;
                     }
 
-                    byte[] dataBuffer = new byte[packetSize];
-                    dataBuffer[0] = firstByteBuffer[0];
-
-                    int totalBytesReceived = 1;
-                    while (totalBytesReceived < packetSize)
+                    SocketPacket? packet;
+                    byte[] dataBuffer = ArrayPool<byte>.Shared.Rent(packetSize);
+                    try
                     {
-                        int read = await _stream.ReadAsync(dataBuffer, totalBytesReceived, packetSize - totalBytesReceived, token);
-                        if (read == 0) break;
-                        totalBytesReceived += read;
+                        dataBuffer[0] = firstByteBuffer[0];
+                        await TransferFrameProtocol.ReadExactAsync(
+                            _stream,
+                            dataBuffer,
+                            1,
+                            packetSize - 1,
+                            token);
+                        packet = JsonSerializer.Deserialize<SocketPacket>(
+                            new ReadOnlySpan<byte>(dataBuffer, 0, packetSize));
                     }
-
-                    string jsonStr = Encoding.UTF8.GetString(dataBuffer);
-                    var packet = JsonSerializer.Deserialize<SocketPacket>(jsonStr);
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(dataBuffer);
+                    }
 
                     if (packet != null)
                     {
+                        if (!string.Equals(packet.AgentID, expectedAgentId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            throw new AuthenticationException(
+                                "AgentID trong lệnh Control không khớp Agent đang kết nối.");
+                        }
+
                         // BO SUNG MODULE BACKUP: config va ACK cua phien backup.
                         if (packet.Type == BackupPacketTypes.ConfigDeploy)
                         {
@@ -1301,10 +1302,11 @@ namespace AgentService
                         {
                             if (!string.IsNullOrEmpty(packet.Data))
                             {
-                                // Khởi chạy một luồng Task độc lập để băm file, tránh làm nghẽn mạch Socket chính của Agent
-                                _ = Task.Run(async () =>
+                                // Lay slot truoc khi tao task de thu muc hang tram nghin file khong
+                                // tao hang tram nghin Task dang cho trong RAM. TCP se tu back-pressure.
+                                await _downloadLock.WaitAsync(token);
+                                _ = RunBackgroundOperationAsync(async () =>
                                 {
-                                    await _downloadLock.WaitAsync(token);
                                     using IDisposable sleepBlock = SystemSleepBlocker.PreventSystemSleep(
                                         "AgentServices đang gửi file về AgentControl.");
                                     DownloadRequestModel? request = null;
@@ -1314,7 +1316,12 @@ namespace AgentService
                                     {
                                         // 1. Giải mã gói yêu cầu từ Server
                                         request = JsonSerializer.Deserialize<DownloadRequestModel>(packet.Data);
-                                        if (request == null) return;
+                                        if (request == null ||
+                                            string.IsNullOrWhiteSpace(request.DownloadID) ||
+                                            string.IsNullOrWhiteSpace(request.RemotePath))
+                                        {
+                                            throw new InvalidDataException("Yêu cầu download không hợp lệ.");
+                                        }
 
                                         string filePath = request.RemotePath;
                                         currentOffset = request.Offset;
@@ -1326,12 +1333,33 @@ namespace AgentService
                                             return;
                                         }
 
-                                        FileInfo fileInfo = new FileInfo(filePath);
-                                        totalBytes = fileInfo.Length;
+                                        const int bufferSize = 1024 * 1024;
+                                        using FileStream fs = new FileStream(
+                                            filePath,
+                                            FileMode.Open,
+                                            FileAccess.Read,
+                                            FileShare.Read,
+                                            bufferSize,
+                                            FileOptions.Asynchronous | FileOptions.SequentialScan);
+                                        totalBytes = fs.Length;
+                                        if (currentOffset < 0 || currentOffset > totalBytes)
+                                        {
+                                            await SendDownloadErrorAsync(
+                                                packet.AgentID,
+                                                request.DownloadID,
+                                                filePath,
+                                                "Mốc resume không còn phù hợp với file nguồn; cần tải lại từ đầu.",
+                                                0,
+                                                totalBytes,
+                                                resetRequired: true);
+                                            return;
+                                        }
+
                                         string checksumAlgorithm = NormalizeChecksumAlgorithm(request.ChecksumAlgorithm);
                                         string sourceChecksum = IsChecksumEnabled(checksumAlgorithm)
-                                            ? await ComputeFileChecksumAsync(filePath, checksumAlgorithm, token)
+                                            ? await ComputeStreamChecksumAsync(fs, checksumAlgorithm, token)
                                             : string.Empty;
+                                        fs.Seek(0, SeekOrigin.Begin);
 
                                         if (totalBytes == 0)
                                         {
@@ -1353,7 +1381,7 @@ namespace AgentService
                                         }
 
                                         // Định nghĩa kích thước mỗi khối băm nhỏ (Buffer Size = 256KB tăng tốc độ truyền tải)
-                                        if (currentOffset >= totalBytes)
+                                        if (currentOffset == totalBytes)
                                         {
                                             var completedChunk = new FileChunkPacket
                                             {
@@ -1372,19 +1400,14 @@ namespace AgentService
                                             return;
                                         }
 
-                                        int bufferSize = 1024 * 1024;
                                         byte[] buffer = new byte[bufferSize];
 
-                                        // 3. Mở FileStream chế độ Read và Share để đọc cuốn chiếu, không khóa file hệ thống
-                                        using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, bufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan))
-                                        {
-                                            // Nhảy cóc đến vị trí Offset được yêu cầu
-                                            fs.Seek(currentOffset, SeekOrigin.Begin);
+                                        // File duoc giu khoa ghi trong suot luc bam va truyen de checksum cung mot phien ban.
+                                        fs.Seek(currentOffset, SeekOrigin.Begin);
 
-                                            int bytesRead;
-                                            // Vòng lặp đọc file cuốn chiếu cho đến hết
-                                            while ((bytesRead = await fs.ReadAsync(buffer, 0, buffer.Length)) > 0)
-                                            {
+                                        int bytesRead;
+                                        while ((bytesRead = await fs.ReadAsync(buffer, 0, buffer.Length, token)) > 0)
+                                        {
                                                 // Trích xuất mảng byte thực tế đọc được từ file
                                                 // Đóng gói dữ liệu sang mô hình FileChunkPacket
                                                 var chunk = new FileChunkPacket
@@ -1412,7 +1435,6 @@ namespace AgentService
 
                                                 // Mẹo nhỏ: Thêm một khoảng Delay cực ngắn (1-2ms) nếu muốn giảm tải CPU cho máy Agent khi tải file quá lớn
                                                 // await Task.Delay(1);
-                                            }
                                         }
                                     }
                                     catch (Exception ex)
@@ -1427,44 +1449,44 @@ namespace AgentService
                                     {
                                         _downloadLock.Release();
                                     }
-                                });
+                                }, "gửi file download về Control", token);
                             }
                         }
 
                         if (packet.Type == "GET_FOLDER_FILES")
                         {
                             string requestData = packet.Data;
-                            _ = Task.Run(async () =>
-                            {
-                                await SendRemoteFolderFilesAsync(packet.AgentID, requestData);
-                            });
+                            _ = RunBackgroundOperationAsync(
+                                () => SendRemoteFolderFilesAsync(packet.AgentID, requestData, token),
+                                "liệt kê file thư mục từ xa",
+                                token);
                         }
 
                         if (packet.Type == "DELETE_REMOTE_ITEMS")
                         {
                             string requestData = packet.Data;
-                            _ = Task.Run(async () =>
-                            {
-                                await HandleRemoteDeleteAsync(packet.AgentID, requestData);
-                            });
+                            _ = RunBackgroundOperationAsync(
+                                () => HandleRemoteDeleteAsync(packet.AgentID, requestData),
+                                "xóa file/thư mục từ xa",
+                                token);
                         }
 
                         if (packet.Type == "OPEN_REMOTE_FILE")
                         {
                             string requestData = packet.Data;
-                            _ = Task.Run(async () =>
-                            {
-                                await HandleRemoteOpenAsync(packet.AgentID, requestData);
-                            });
+                            _ = RunBackgroundOperationAsync(
+                                () => HandleRemoteOpenAsync(packet.AgentID, requestData),
+                                "mở file từ xa",
+                                token);
                         }
 
                         if (packet.Type == "CREATE_REMOTE_DIRECTORY")
                         {
                             string requestData = packet.Data;
-                            _ = Task.Run(async () =>
-                            {
-                                await HandleRemoteCreateDirectoryAsync(packet.AgentID, requestData);
-                            });
+                            _ = RunBackgroundOperationAsync(
+                                () => HandleRemoteCreateDirectoryAsync(packet.AgentID, requestData),
+                                "tạo thư mục từ xa",
+                                token);
                         }
 
                         if (packet.Type == "BROWSE_DRIVES" || packet.Type == "GET_DRIVES")
@@ -1595,12 +1617,7 @@ namespace AgentService
             _isConnected = false;
             ReleaseUploadSleepBlocks();
 
-            try
-            {
-                _stream?.Close();
-                _client?.Close();
-            }
-            catch { }
+            CloseCurrentConnection();
 
             await base.StopAsync(cancellationToken);
         }
