@@ -656,3 +656,11 @@ git status --short --branch
 - Chua co retention/xoa backup cu. Khong tu xoa FIRST/INC de tranh mat du lieu truoc khi user chot chinh sach.
 - INC SessionComplete van la mot JSON frame; voi lich 1-2 ngay va quy mo thay doi thuong duoi 1.000 file thi du suc. FIRST lon da dung manifest streaming. Neu sau nay mot INC co the vuot 16 MB metadata thi can mo rong INC thanh protocol paged.
 - Truoc production phai doi PSK deploy, mo firewall/NAT dung port 9000, bam `Ket noi Agent` tren Control, va test update Windows Service bang mot Agent staging truoc khi rollout tat ca Agent.
+
+### 17.9 Fix trung WinForms resource cua frmToolBackup - 2026-08-25
+
+- Da tai hien loi MSBuild `MSB3577`: `Form1.resx` va file rong `Form1.Tray.resx` cung bi SDK suy ra logical name `AgentControl.frmToolBackup.resources`, nen hai output resource trung nhau.
+- Da xoa `Form1.Tray.resx` rong do Designer phat sinh; file nay khong chua icon, chuoi hay tai nguyen can giu.
+- `AgentControl.csproj` nest cac module partial `Form1.Backup.cs`, `Form1.Lifetime.cs`, `Form1.Recovery.cs`, `Form1.Tray.cs` duoi `Form1.cs` va loai `Form1.*.resx` khoi `EmbeddedResource`. Quy tac nay ngan loi tai phat ngay ca khi Visual Studio lai sinh file `.resx` rong cho mot module partial.
+- Da thu co y tao lai `Form1.Tray.resx`, clean/rebuild van thanh cong va danh sach resource sau MSBuild chi con `Form1.resx`, `frmRecovery.resx`, `Properties/Resources.resx`; sau test da xoa file thu.
+- Da clean/rebuild toan solution Debug va chay lai 57 integration test de xac nhan ban sua metadata khong anh huong chuc nang.

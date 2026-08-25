@@ -19,6 +19,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Cac file partial nay la module cua Form1 va duoc nest duoi form chinh.
+         Neu Designer sinh Form1.*.resx rong, khong embed vi no trung resource frmToolBackup. -->
+    <Compile Update="Form1.Backup.cs;Form1.Lifetime.cs;Form1.Recovery.cs;Form1.Tray.cs">
+      <DependentUpon>Form1.cs</DependentUpon>
+    </Compile>
+    <EmbeddedResource Remove="Form1.*.resx" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Update="Properties\Resources.Designer.cs">
       <DesignTime>True</DesignTime>
       <AutoGen>True</AutoGen>
