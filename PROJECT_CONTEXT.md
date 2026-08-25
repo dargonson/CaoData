@@ -664,3 +664,11 @@ git status --short --branch
 - `AgentControl.csproj` nest cac module partial `Form1.Backup.cs`, `Form1.Lifetime.cs`, `Form1.Recovery.cs`, `Form1.Tray.cs` duoi `Form1.cs` va loai `Form1.*.resx` khoi `EmbeddedResource`. Quy tac nay ngan loi tai phat ngay ca khi Visual Studio lai sinh file `.resx` rong cho mot module partial.
 - Da thu co y tao lai `Form1.Tray.resx`, clean/rebuild van thanh cong va danh sach resource sau MSBuild chi con `Form1.resx`, `frmRecovery.resx`, `Properties/Resources.resx`; sau test da xoa file thu.
 - Da clean/rebuild toan solution Debug va chay lai 57 integration test de xac nhan ban sua metadata khong anh huong chuc nang.
+
+### 17.10 Fix Agent khong bat tay TLS duoc voi Control - 2026-08-25
+
+- Trieu chung: Agent ket noi TCP duoc toi Control nhung nhan `Received an unexpected EOF or 0 bytes from the transport stream`, sau do chuyen tu LAN sang WAN.
+- Nguyen nhan da xac nhan trong Windows Schannel event `36869`: PFX cua Control duoc nap bang `X509KeyStorageFlags.EphemeralKeySet`; .NET van bao `HasPrivateKey=true` nhung Schannel khong the gan private key nay vao TLS server credential va dong socket ngay trong handshake.
+- `ControlSecurityConfiguration` da bo `EphemeralKeySet`, nap private key vao user key store voi `UserKeySet | Exportable`. File PFX cu van dung duoc, khong can xoa certificate hay mat cau hinh.
+- Da bo sung regression test `PersistedTransportCertificate_CanAuthenticateSchannelServer`: tao/nap certificate, dispose, nap lai dung PFX tren dia, sau do bat tay that qua `TcpListener`/`TcpClient` va `SecureTransport` hai chieu.
+- Test moi tai hien dung EOF truoc khi sua va pass sau khi sua. Clean/build Debug: 0 error, 0 warning; build Release: 0 error, 0 warning; toan bo test Debug va Release: 58/58 pass moi cau hinh.

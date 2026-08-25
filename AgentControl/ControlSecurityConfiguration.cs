@@ -104,13 +104,21 @@ namespace AgentControl
             return new X509Certificate2(
                 pfx,
                 (string?)null,
-                X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable);
+                GetServerKeyStorageFlags());
         }
 
         private static X509Certificate2 LoadCertificate(string path) =>
             new X509Certificate2(
                 path,
                 (string?)null,
-                X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable);
+                GetServerKeyStorageFlags());
+
+        private static X509KeyStorageFlags GetServerKeyStorageFlags()
+        {
+            // BO SUNG BAO MAT KET NOI: Windows Schannel can private key nam trong
+            // key store de dung certificate lam TLS server credential. EphemeralKeySet
+            // van bao HasPrivateKey=true nhung Schannel se dong handshake voi event 36869.
+            return X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable;
+        }
     }
 }
