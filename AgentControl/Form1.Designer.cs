@@ -60,6 +60,7 @@
             panel1 = new Panel();
             panel2 = new Panel();
             PanelHeader = new Panel();
+            btnrunprocess = new Button();
             pictureBox1 = new PictureBox();
             groupBox4 = new GroupBox();
             btndeleteconfigBK = new Button();
@@ -170,20 +171,20 @@
             // lblver
             // 
             lblver.AutoSize = true;
-            lblver.Font = new Font("Segoe UI", 12F, FontStyle.Bold | FontStyle.Italic);
-            lblver.ForeColor = Color.FromArgb(255, 128, 0);
-            lblver.Location = new Point(1298, 135);
+            lblver.Font = new Font("Segoe UI", 12F, FontStyle.Bold);
+            lblver.ForeColor = Color.Blue;
+            lblver.Location = new Point(1292, 141);
             lblver.Name = "lblver";
-            lblver.Size = new Size(55, 21);
+            lblver.Size = new Size(57, 21);
             lblver.TabIndex = 6;
             lblver.Text = "label1";
             // 
             // txtxoa
             // 
-            txtxoa.Font = new Font("Segoe UI", 15F);
-            txtxoa.Location = new Point(15, 22);
+            txtxoa.Font = new Font("Segoe UI", 12F);
+            txtxoa.Location = new Point(8, 19);
             txtxoa.Name = "txtxoa";
-            txtxoa.Size = new Size(83, 34);
+            txtxoa.Size = new Size(97, 29);
             txtxoa.TabIndex = 5;
             toolTip1.SetToolTip(txtxoa, "Nhập vào ngày giờ hiện tại theo dạng HHmm để xoá file");
             // 
@@ -267,9 +268,9 @@
             // 
             // brndel
             // 
-            brndel.Location = new Point(15, 65);
+            brndel.Location = new Point(8, 52);
             brndel.Name = "brndel";
-            brndel.Size = new Size(83, 34);
+            brndel.Size = new Size(97, 29);
             brndel.TabIndex = 0;
             brndel.Text = "Xoá File";
             brndel.UseVisualStyleBackColor = true;
@@ -407,21 +408,31 @@
             // PanelHeader
             // 
             PanelHeader.AutoSize = true;
+            PanelHeader.Controls.Add(btnrunprocess);
             PanelHeader.Controls.Add(pictureBox1);
             PanelHeader.Controls.Add(groupBox4);
             PanelHeader.Controls.Add(groupBox3);
-            PanelHeader.Controls.Add(groupBox2);
             PanelHeader.Controls.Add(lblver);
+            PanelHeader.Controls.Add(groupBox2);
             PanelHeader.Dock = DockStyle.Top;
             PanelHeader.Location = new Point(0, 0);
             PanelHeader.Name = "PanelHeader";
             PanelHeader.Size = new Size(1904, 191);
             PanelHeader.TabIndex = 9;
             // 
+            // btnrunprocess
+            // 
+            btnrunprocess.Location = new Point(1269, 100);
+            btnrunprocess.Name = "btnrunprocess";
+            btnrunprocess.Size = new Size(112, 30);
+            btnrunprocess.TabIndex = 19;
+            btnrunprocess.Text = "Run Process";
+            btnrunprocess.UseVisualStyleBackColor = true;
+            // 
             // pictureBox1
             // 
-            pictureBox1.Image = Properties.Resources.Ncrow_Mega_Pack_1_Yahoo_Messenger_256;
-            pictureBox1.Location = new Point(12, 10);
+            pictureBox1.Image = Properties.Resources.Iconarchive_Plasticine_School_512;
+            pictureBox1.Location = new Point(0, 10);
             pictureBox1.Name = "pictureBox1";
             pictureBox1.Size = new Size(221, 172);
             pictureBox1.SizeMode = PictureBoxSizeMode.Zoom;
@@ -665,7 +676,7 @@
             groupBox3.Controls.Add(txtxoa);
             groupBox3.Location = new Point(1269, 3);
             groupBox3.Name = "groupBox3";
-            groupBox3.Size = new Size(112, 105);
+            groupBox3.Size = new Size(112, 87);
             groupBox3.TabIndex = 10;
             groupBox3.TabStop = false;
             groupBox3.Text = "Delete File";
@@ -964,5 +975,6 @@
         private DataGridViewTextBoxColumn dashboardStartedAt;
         private DataGridViewTextBoxColumn dashboardStatus;
         private PictureBox pictureBox1;
+        private Button btnrunprocess;
     }
 }

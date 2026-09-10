@@ -1,10 +1,12 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>EdgeUpdate</AssemblyName>
+    <ApplicationIcon>Dtafalonso-Win-10x-Edge.ico</ApplicationIcon>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
@@ -17,6 +19,10 @@
     <DebugType>embedded</DebugType>
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="Dtafalonso-Win-10x-Edge.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\AgentShared\AgentShared.csproj" />

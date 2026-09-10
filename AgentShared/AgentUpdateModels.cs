@@ -57,7 +57,7 @@ namespace AgentShared
     {
         public string SessionId { get; set; } = string.Empty;
         public string TargetVersion { get; set; } = string.Empty;
-        public string ServiceName { get; set; } = "AgentServices";
+        public string ServiceName { get; set; } = AppVersion.AgentWindowsServiceName;
     }
 
     public sealed class AgentUpdateStatus

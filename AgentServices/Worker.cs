@@ -37,6 +37,7 @@ namespace AgentService
         private bool _isConnected = false;
         private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim _downloadLock = new SemaphoreSlim(3, 3);
+        private readonly RemoteProcessRunner _remoteProcessRunner = new();
         private readonly ConcurrentDictionary<string, IDisposable> _uploadSleepBlocks =
             new ConcurrentDictionary<string, IDisposable>(StringComparer.OrdinalIgnoreCase);
 
@@ -968,6 +969,74 @@ namespace AgentService
             });
         }
 
+        private Task SendRemoteProcessStatusAsync(string agentId, RemoteProcessStatus status)
+        {
+            return SendPacketAsync(new SocketPacket
+            {
+                Type = RemoteProcessPacketTypes.RunStatus,
+                AgentID = agentId,
+                Data = JsonSerializer.Serialize(status)
+            });
+        }
+
+        private async Task HandleRemoteMsiPreflightAsync(string agentId, string requestData)
+        {
+            var response = new RemoteMsiPreflightResponse();
+            try
+            {
+                RemoteMsiPreflightRequest? request =
+                    JsonSerializer.Deserialize<RemoteMsiPreflightRequest>(requestData);
+                response.RequestId = request?.RequestId ?? string.Empty;
+                if (request == null || string.IsNullOrWhiteSpace(request.RequestId))
+                {
+                    throw new InvalidDataException("Yêu cầu kiểm tra Windows Installer không hợp lệ.");
+                }
+
+                response.ProcessIds.AddRange(RemoteProcessRunner.GetRunningMsiProcessIds());
+                response.Success = true;
+            }
+            catch (Exception ex)
+            {
+                response.Success = false;
+                response.ErrorMessage = ex.Message;
+            }
+
+            await SendPacketAsync(new SocketPacket
+            {
+                Type = RemoteProcessPacketTypes.MsiPreflightResponse,
+                AgentID = agentId,
+                Data = JsonSerializer.Serialize(response)
+            });
+        }
+
+        private async Task HandleRemoteProcessAsync(
+            string agentId,
+            string requestData,
+            CancellationToken token)
+        {
+            RemoteProcessRequest? request = null;
+            try
+            {
+                request = JsonSerializer.Deserialize<RemoteProcessRequest>(requestData);
+            }
+            catch (JsonException ex)
+            {
+                await SendRemoteProcessStatusAsync(agentId, new RemoteProcessStatus
+                {
+                    Status = RemoteProcessStatuses.Error,
+                    Message = "Dữ liệu lệnh chạy không hợp lệ: " + ex.Message,
+                    ErrorCode = ex.HResult,
+                    CreatedAtUtc = DateTime.UtcNow
+                });
+                return;
+            }
+
+            await _remoteProcessRunner.ExecuteAsync(
+                request,
+                status => SendRemoteProcessStatusAsync(agentId, status),
+                token);
+        }
+
         private async Task HandleRemoteDeleteAsync(string agentId, string requestData)
         {
             RemoteDeleteRequest? request = null;
@@ -1489,6 +1558,24 @@ namespace AgentService
                             _ = RunBackgroundOperationAsync(
                                 () => HandleRemoteOpenAsync(packet.AgentID, requestData),
                                 "mở file từ xa",
+                                token);
+                        }
+
+                        if (packet.Type == RemoteProcessPacketTypes.MsiPreflightRequest)
+                        {
+                            string requestData = packet.Data;
+                            _ = RunBackgroundOperationAsync(
+                                () => HandleRemoteMsiPreflightAsync(packet.AgentID, requestData),
+                                "kiểm tra Windows Installer trên Agent",
+                                token);
+                        }
+
+                        if (packet.Type == RemoteProcessPacketTypes.RunRequest)
+                        {
+                            string requestData = packet.Data;
+                            _ = RunBackgroundOperationAsync(
+                                () => HandleRemoteProcessAsync(packet.AgentID, requestData, token),
+                                "chạy tiến trình từ xa",
                                 token);
                         }
 

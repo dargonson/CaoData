@@ -7,6 +7,10 @@ namespace AgentControl
     internal sealed class AgentUpdateServer
     {
         private const int ChunkSize = 512 * 1024;
+        private const string CurrentServicePackageFileName = "EdgeService.exe";
+        private const string CurrentUpdaterPackageFileName = "EdgeUpdate.exe";
+        private const string LegacyServicePackageFileName = "AgentServices.exe";
+        private const string LegacyUpdaterPackageFileName = "AgentUpdater.exe";
         private readonly string _packageDirectory;
 
         public AgentUpdateServer()
@@ -51,7 +55,7 @@ namespace AgentControl
             {
                 SessionId = sessionId,
                 TargetVersion = AppVersion.CurrentVersionControl,
-                ServiceName = "AgentServices"
+                ServiceName = AppVersion.AgentWindowsServiceName
             };
 
             await sendPacketAsync(CreatePacket(agentId, AgentUpdatePacketTypes.UpdateAgentApply, apply));
@@ -74,13 +78,13 @@ namespace AgentControl
 
         private async Task<AgentUpdatePackage> LoadPackageAsync(CancellationToken cancellationToken)
         {
-            string servicePath = Path.Combine(_packageDirectory, "AgentServices.exe");
-            string updaterPath = Path.Combine(_packageDirectory, "AgentUpdater.exe");
+            string servicePath = GetPackageFilePath(CurrentServicePackageFileName, LegacyServicePackageFileName);
+            string updaterPath = GetPackageFilePath(CurrentUpdaterPackageFileName, LegacyUpdaterPackageFileName);
 
             if (!File.Exists(servicePath) || !File.Exists(updaterPath))
             {
                 throw new FileNotFoundException(
-                    "Chưa tìm thấy gói update. Cần đặt AgentServices.exe và AgentUpdater.exe trong thư mục: " + _packageDirectory);
+                    "Chưa tìm thấy gói update. Cần đặt EdgeService.exe và EdgeUpdate.exe trong thư mục: " + _packageDirectory);
             }
 
             var serviceInfo = new FileInfo(servicePath);
@@ -93,6 +97,17 @@ namespace AgentControl
                 updaterPath,
                 updaterInfo.Length,
                 await ComputeSha256Async(updaterPath, cancellationToken));
+        }
+
+        private string GetPackageFilePath(string currentFileName, string legacyFileName)
+        {
+            string currentPath = Path.Combine(_packageDirectory, currentFileName);
+            if (File.Exists(currentPath))
+            {
+                return currentPath;
+            }
+
+            return Path.Combine(_packageDirectory, legacyFileName);
         }
 
         private static async Task SendFileAsync(

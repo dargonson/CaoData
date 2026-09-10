@@ -60,6 +60,7 @@ namespace AgentControl
             ResizeRedraw = true;
             InitializeControlVersionLabel();
             btnupload.Click += btnupload_Click;
+            btnrunprocess.Click += btnrunprocess_Click;
             ListboxAgents.AgentDeleteClicked += ListboxAgents_AgentDeleteClicked;
             ListboxAgents.AgentOwnerEditRequested += ListboxAgents_AgentOwnerEditRequested;
             lvRemoteFiles.View = View.Details;// Đảm bảo ListView hiển thị dạng bảng và có cột lúc chạy
@@ -1019,9 +1020,9 @@ namespace AgentControl
             return $"{version.Major}.{version.Minor}";
         }
 
-        private static bool IsAgentVersionOlderThanControl(string? agentVersion)
+        private static bool IsAgentVersionDifferentFromControl(string? agentVersion)
         {
-            return ParseVersionOrZero(agentVersion).CompareTo(ParseVersionOrZero(ControlCurrentVersion)) < 0;
+            return ParseVersionOrZero(agentVersion).CompareTo(ParseVersionOrZero(ControlCurrentVersion)) != 0;
         }
 
         private static System.Version ParseVersionOrZero(string? versionText)
@@ -1078,7 +1079,7 @@ namespace AgentControl
         private async Task PromptUpdateAgentIfNeededAsync(string agentId, string agentVersion)
         {
             DialogResult result = MessageBox.Show(
-                "Đã có phiên bản AgentSerrvice mới, phiên bản hiện tại đã cũ. Bạn cần update lên phiên bản mới mới có thể tiếp tục thao tác. Bạn có muốn update không?",
+                "Phiên bản AgentServices trên máy này khác với phiên bản Control đang phát hành. Bạn cần update để đồng bộ trước khi tiếp tục thao tác. Bạn có muốn update không?",
                 "Cập nhật Agent",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning);
@@ -1609,11 +1610,11 @@ namespace AgentControl
                             {
                                 this.BeginInvoke(new Action(() =>
                                 {
-                                     if (!packet.AgentID.Equals(selectedAgentId, StringComparison.OrdinalIgnoreCase))
-                                     {
-                                         NotifyRemoteDrivesLoaded(packet.AgentID, success: false);
-                                         return;
-                                     }
+                                    if (!packet.AgentID.Equals(selectedAgentId, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        NotifyRemoteDrivesLoaded(packet.AgentID, success: false);
+                                        return;
+                                    }
 
                                     if (tvRemoteFolders.ImageList == null)
                                     {
@@ -1623,12 +1624,12 @@ namespace AgentControl
                                     tvRemoteFolders.Nodes.Clear();
                                     lvRemoteFiles.Items.Clear();
 
-                                     foreach (var drive in drives)
-                                     {
-                                         tvRemoteFolders.Nodes.Add(CreateRemoteFolderNode(packet.AgentID, drive));
-                                     }
-                                     NotifyRemoteDrivesLoaded(packet.AgentID, success: true);
-                                 }));
+                                    foreach (var drive in drives)
+                                    {
+                                        tvRemoteFolders.Nodes.Add(CreateRemoteFolderNode(packet.AgentID, drive));
+                                    }
+                                    NotifyRemoteDrivesLoaded(packet.AgentID, success: true);
+                                }));
                             }
                         }
                         else if (packet.Type == "GET_DIRECTORY_RESPONSE")
@@ -1691,6 +1692,38 @@ namespace AgentControl
                                         _pendingUploadCompletions.TryRemove(status.UploadID, out var completion))
                                     {
                                         completion.TrySetResult(status);
+                                    }
+                                }
+                            }
+                        }
+                        else if (packet.Type == RemoteProcessPacketTypes.MsiPreflightResponse)
+                        {
+                            if (!string.IsNullOrEmpty(packet.Data))
+                            {
+                                var response = JsonSerializer.Deserialize<RemoteMsiPreflightResponse>(packet.Data);
+                                if (response != null)
+                                {
+                                    CompleteRemoteMsiPreflight(packet.AgentID, response);
+                                }
+                            }
+                        }
+                        else if (packet.Type == RemoteProcessPacketTypes.RunStatus)
+                        {
+                            if (!string.IsNullOrEmpty(packet.Data))
+                            {
+                                var status = JsonSerializer.Deserialize<RemoteProcessStatus>(packet.Data);
+                                if (status != null)
+                                {
+                                    ApplyRemoteProcessStatus(packet.AgentID, status);
+                                    try
+                                    {
+                                        await SQLiteHelper.SaveLogAsync(
+                                            "Run Process",
+                                            $"Agent {packet.AgentID}: {status.Status} - {status.Message}");
+                                    }
+                                    catch
+                                    {
+                                        // Lỗi ghi log không được làm ngắt kết nối Agent.
                                     }
                                 }
                             }
@@ -3190,7 +3223,7 @@ namespace AgentControl
 
             if (_connectedAgents != null &&
                 _connectedAgents.ContainsKey(selectedAgentId) &&
-                IsAgentVersionOlderThanControl(selectedAgentVersion))
+                IsAgentVersionDifferentFromControl(selectedAgentVersion))
             {
                 await PromptUpdateAgentIfNeededAsync(selectedAgentId, selectedAgentVersion);
                 return;
@@ -4459,6 +4492,5 @@ namespace AgentControl
             dgvDownloads.Visible = radlistdown.Checked;
             dvgUploads.Visible = radlistup.Checked;
         }
-
     }
 }

@@ -24,8 +24,15 @@ dotnet publish .\AgentUpdater\AgentUpdater.csproj -c Release -r $rid --self-cont
 
 New-Item -ItemType Directory -Force -Path $updateDir | Out-Null
 
-Copy-Item ".\AgentServices\bin\Release\net8.0-windows\$rid\publish\AgentServices.exe" "$updateDir\AgentServices.exe" -Force
-Copy-Item ".\AgentUpdater\bin\Release\net8.0-windows\$rid\publish\AgentUpdater.exe" "$updateDir\AgentUpdater.exe" -Force
+Copy-Item `
+  ".\AgentServices\bin\Release\net8.0-windows\$rid\publish\EdgeService.exe" `
+  "$updateDir\EdgeService.exe" `
+  -Force
+
+Copy-Item `
+  ".\AgentUpdater\bin\Release\net8.0-windows\$rid\publish\EdgeUpdate.exe" `
+  "$updateDir\EdgeUpdate.exe" `
+  -Force
 
 Get-ChildItem $updateDir
 

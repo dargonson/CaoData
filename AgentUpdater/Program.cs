@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text.Json;
 using AgentShared;
+using Microsoft.Win32;
 
 namespace AgentUpdater
 {
@@ -21,6 +22,10 @@ namespace AgentUpdater
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
                 options = UpdateOptions.Parse(args);
+                options.ServiceName = await ResolveInstalledServiceNameAsync(
+                    options.ServiceName,
+                    options.CurrentExe,
+                    logPath);
                 reporter = new UpdateStatusReporter(
                     options.AgentId,
                     options.SessionId,
@@ -165,6 +170,119 @@ namespace AgentUpdater
             }
         }
 
+        private static async Task<string> ResolveInstalledServiceNameAsync(
+            string requestedServiceName,
+            string currentExe,
+            string logPath)
+        {
+            if (await IsServiceInstalledAsync(requestedServiceName, logPath))
+            {
+                return requestedServiceName;
+            }
+
+            string? serviceNameFromRegistry = FindInstalledServiceNameByImagePath(currentExe);
+            if (!string.IsNullOrWhiteSpace(serviceNameFromRegistry))
+            {
+                await LogAsync(
+                    logPath,
+                    $"Service name '{requestedServiceName}' không tồn tại; tự dò theo ImagePath và dùng '{serviceNameFromRegistry}'.");
+                return serviceNameFromRegistry;
+            }
+
+            await LogAsync(
+                logPath,
+                $"Không dò được service theo ImagePath; vẫn dùng service name được gửi xuống: '{requestedServiceName}'.");
+            return requestedServiceName;
+        }
+
+        private static async Task<bool> IsServiceInstalledAsync(string serviceName, string logPath)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "sc.exe",
+                Arguments = $"query \"{serviceName}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            using Process process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Không chạy được sc.exe query.");
+            string output = await process.StandardOutput.ReadToEndAsync();
+            string error = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            await LogAsync(logPath, $"sc query installed exit={process.ExitCode} output={output.Trim()} error={error.Trim()}");
+            return process.ExitCode == 0;
+        }
+
+        private static string? FindInstalledServiceNameByImagePath(string currentExe)
+        {
+            string currentExeFullPath = Path.GetFullPath(currentExe);
+            using RegistryKey? servicesKey = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services");
+            if (servicesKey == null)
+            {
+                return null;
+            }
+
+            foreach (string serviceName in servicesKey.GetSubKeyNames())
+            {
+                try
+                {
+                    using RegistryKey? serviceKey = servicesKey.OpenSubKey(serviceName);
+                    string? imagePath = serviceKey?.GetValue("ImagePath")?.ToString();
+                    string? executablePath = ExtractExecutablePath(imagePath);
+                    if (string.IsNullOrWhiteSpace(executablePath))
+                    {
+                        continue;
+                    }
+
+                    if (Path.GetFullPath(executablePath)
+                        .Equals(currentExeFullPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return serviceName;
+                    }
+                }
+                catch
+                {
+                    // Bo qua service khong doc duoc ImagePath; updater chi can tim service cua chinh no.
+                }
+            }
+
+            return null;
+        }
+
+        private static string? ExtractExecutablePath(string? imagePath)
+        {
+            if (string.IsNullOrWhiteSpace(imagePath))
+            {
+                return null;
+            }
+
+            string expanded = Environment.ExpandEnvironmentVariables(imagePath.Trim());
+            if (expanded.Length == 0)
+            {
+                return null;
+            }
+
+            if (expanded[0] == '"')
+            {
+                int closingQuote = expanded.IndexOf('"', 1);
+                return closingQuote > 1
+                    ? expanded.Substring(1, closingQuote - 1)
+                    : expanded.Trim('"');
+            }
+
+            int exeIndex = expanded.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+            if (exeIndex >= 0)
+            {
+                return expanded.Substring(0, exeIndex + ".exe".Length).Trim();
+            }
+
+            int firstSpace = expanded.IndexOf(' ');
+            return firstSpace > 0 ? expanded.Substring(0, firstSpace) : expanded;
+        }
+
         private static async Task TryRunScAsync(string command, string serviceName, string logPath)
         {
             try
@@ -294,7 +412,7 @@ namespace AgentUpdater
 
         private sealed class UpdateOptions
         {
-            public string ServiceName { get; private set; } = "AgentServices";
+            public string ServiceName { get; set; } = AppVersion.AgentWindowsServiceName;
             public string CurrentExe { get; private set; } = string.Empty;
             public string NewExe { get; private set; } = string.Empty;
             public string BackupDirectory { get; private set; } = string.Empty;
@@ -323,7 +441,7 @@ namespace AgentUpdater
 
                 var options = new UpdateOptions
                 {
-                    ServiceName = Get(values, "service-name", "AgentServices"),
+                    ServiceName = Get(values, "service-name", AppVersion.AgentWindowsServiceName),
                     CurrentExe = GetRequired(values, "current-exe"),
                     NewExe = GetRequired(values, "new-exe"),
                     BackupDirectory = GetRequired(values, "backup-dir"),

@@ -10,9 +10,11 @@ namespace AgentService
     {
         private const int BufferSize = 512 * 1024;
         private const long MaxUpdateFileBytes = 1024L * 1024 * 1024;
+        private static readonly TimeSpan UpdateCleanupDelay = TimeSpan.FromSeconds(10);
         private readonly Func<SocketPacket, Task> _sendPacketAsync;
         private readonly Func<(string Host, int Port)> _getControlEndpoint;
         private readonly ILogger _logger;
+        private readonly object _sessionsSync = new object();
         private readonly Dictionary<string, UpdateSession> _sessions = new Dictionary<string, UpdateSession>(StringComparer.OrdinalIgnoreCase);
 
         public AgentUpdateClient(Func<SocketPacket, Task> sendPacketAsync, Func<(string Host, int Port)> getControlEndpoint, ILogger logger)
@@ -68,6 +70,7 @@ namespace AgentService
                 }
 
                 File.Delete(markerPath);
+                QueueUpdateRootCleanup();
             }
             catch (Exception ex)
             {
@@ -121,7 +124,10 @@ namespace AgentService
             Directory.CreateDirectory(sessionRoot);
 
             var session = new UpdateSession(request.SessionId, sessionRoot, request);
-            _sessions[request.SessionId] = session;
+            lock (_sessionsSync)
+            {
+                _sessions[request.SessionId] = session;
+            }
 
             string manifestPath = Path.Combine(sessionRoot, "manifest.json");
             await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(request, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
@@ -296,12 +302,92 @@ namespace AgentService
 
         private UpdateSession GetSession(string sessionId)
         {
-            if (string.IsNullOrWhiteSpace(sessionId) || !_sessions.TryGetValue(sessionId, out UpdateSession? session))
+            if (string.IsNullOrWhiteSpace(sessionId))
             {
                 throw new InvalidDataException("Không tìm thấy phiên update.");
             }
 
-            return session;
+            lock (_sessionsSync)
+            {
+                if (_sessions.TryGetValue(sessionId, out UpdateSession? session))
+                {
+                    return session;
+                }
+            }
+
+            throw new InvalidDataException("Không tìm thấy phiên update.");
+        }
+
+        private void QueueUpdateRootCleanup()
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(UpdateCleanupDelay);
+                    CleanupUpdateRoot();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Khong the don thu muc update sau khi cap nhat xong.");
+                }
+            });
+        }
+
+        private void CleanupUpdateRoot()
+        {
+            lock (_sessionsSync)
+            {
+                if (_sessions.Count > 0)
+                {
+                    _logger.LogInformation("Bo qua don thu muc update vi dang co phien update moi.");
+                    return;
+                }
+            }
+
+            string root = AppVersion.GetAgentUpdateRootDirectory();
+            string markerPath = AppVersion.GetAgentUpdateCompletionMarkerPath();
+            if (File.Exists(markerPath))
+            {
+                _logger.LogInformation("Bo qua don thu muc update vi completion marker chua duoc xu ly.");
+                return;
+            }
+
+            foreach (string directory in Directory.EnumerateDirectories(root))
+            {
+                TryDeleteDirectory(directory);
+            }
+
+            foreach (string file in Directory.EnumerateFiles(root))
+            {
+                TryDeleteFile(file);
+            }
+        }
+
+        private void TryDeleteDirectory(string directory)
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+                _logger.LogInformation("Da xoa thu muc update tam: {Directory}", directory);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Khong xoa duoc thu muc update tam: {Directory}", directory);
+            }
+        }
+
+        private void TryDeleteFile(string file)
+        {
+            try
+            {
+                File.Delete(file);
+                _logger.LogInformation("Da xoa file update tam: {File}", file);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Khong xoa duoc file update tam: {File}", file);
+            }
         }
 
         private static UpdateFileState GetVerifiedFile(UpdateSession session, string role)

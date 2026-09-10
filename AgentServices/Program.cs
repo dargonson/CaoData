@@ -1,4 +1,5 @@
 using AgentService;
+using AgentShared;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -49,7 +50,7 @@ namespace AgentServices
             Host.CreateDefaultBuilder(args)
                 .UseWindowsService(options =>
                 {
-                    options.ServiceName = "AgentServices";
+                    options.ServiceName = AppVersion.AgentWindowsServiceName;
                 }) // Ép chạy ngầm dạng Windows Service
                 .ConfigureLogging(logging =>
                 {

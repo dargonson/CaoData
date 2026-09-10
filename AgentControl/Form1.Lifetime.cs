@@ -66,6 +66,12 @@ namespace AgentControl
             }
             _pendingUploadCompletions.Clear();
             _pendingUploadAgents.Clear();
+            _remoteProcessRequests.Clear();
+            foreach (RemoteMsiPreflightTracking pending in _remoteMsiPreflightRequests.Values)
+            {
+                pending.Completion.TrySetCanceled(_controlLifetimeCts.Token);
+            }
+            _remoteMsiPreflightRequests.Clear();
         }
 
         private void DisposeControlRuntime()
